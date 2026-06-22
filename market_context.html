@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>日足オシレーター（MA追加版）</title>
+    <style>
+        *{box-sizing:border-box;}
+        body{background:#0f1117;color:#e2e6f0;font-family:system-ui,sans-serif;padding:20px;}
+        .card{background:#171b24;border:0.5px solid #2a3040;border-radius:12px;padding:20px;margin-bottom:24px;}
+        button{background:#4a90d9;border:none;color:#fff;padding:8px 20px;border-radius:8px;cursor:pointer;margin-right:8px;font-weight:bold;}
+        button:disabled{opacity:0.4;}
+        .drop-zone{border:1.5px dashed #2a3040;border-radius:12px;padding:24px;text-align:center;cursor:pointer;background:#0f1117;}
+        .drop-zone.drag-over{border-color:#4a90d9;background:#1a1f2c;}
+        .file-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;justify-content:center;}
+        .file-chip{background:#1e2330;padding:4px 10px;border-radius:20px;font-size:11px;}
+        table{width:100%;border-collapse:collapse;font-size:11px;}
+        th,td{border:0.5px solid #2a3040;padding:5px 8px;text-align:center;}
+        th{background:#1e2330;}
+        .positive{color:#2ecc8a;}
+        .negative{color:#e05555;}
+        textarea{width:100%;background:#0f1117;border:0.5px solid #2a3040;color:#e2e6f0;font-family:monospace;padding:8px;border-radius:8px;margin-top:12px;}
+    </style>
+</head>
+<body>
+<div class="card">
+    <h2>📊 EURUSD 日足オシレーター + 移動平均（MA50/MA200）</h2>
+    <p>✅ 列名が「商品名,商品タイプ,取引日,始値,高値,安値,終値」でもOK</p>
+    <div class="drop-zone" id="dropZone">
+        📂 CSVファイルをドロップ（複数可）<br>
+        <span style="font-size:12px;">またはクリックして選択</span>
+        <input type="file" id="fileInput" accept=".csv" multiple style="display:none;">
+        <div class="file-list" id="fileList"></div>
+    </div>
+    <div id="statusMsg" style="font-size:12px; margin-top:8px;"></div>
+    <div style="margin-top:16px;">
+        <button id="calcBtn" disabled>🔄 オシレーター計算</button>
+        <button id="clearBtn">🗑️ 全クリア</button>
+    </div>
+</div>
+<div id="resultCard" class="card" style="display:none;">
+    <h3>計算結果</h3>
+    <div style="overflow-x:auto;"><table id="resultTable"><thead id="tableHeader"></thead><tbody id="tableBody"></tbody></table></div>
+    <button id="copyBtn">📋 テキストコピー（AI共有用）</button>
+    <textarea id="exportText" rows="6" readonly placeholder="計算後にコピー用テキストが表示されます"></textarea>
+</div>
+
+<script>
+    // ---------- テクニカル指標（SMA含む） ----------
+    function sma(arr,p){const r=new Array(arr.length).fill(NaN);for(let i=p-1;i<arr.length;i++){let s=0;for(let j=0;j<p;j++)s+=arr[i-j];r[i]=s/p;}return r;}
+    function cci(h,l,c,p=14){const tp=h.map((v,i)=>(v+l[i]+c[i])/3);const smaTP=sma(tp,p);const mad=new Array(tp.length).fill(NaN);for(let i=p-1;i<tp.length;i++){let sum=0;for(let j=0;j<p;j++)sum+=Math.abs(tp[i-j]-smaTP[i]);mad[i]=sum/p;}return tp.map((v,i)=>i<p-1||mad[i]===0?NaN:(v-smaTP[i])/(0.015*mad[i]));}
+    function atr(h,l,c,p=14){const tr=h.map((v,i)=>{if(i===0)return v-l[i];const pc=c[i-1];return Math.max(v-l[i],Math.abs(v-pc),Math.abs(l[i]-pc));});const atrV=new Array(tr.length).fill(NaN);for(let i=p-1;i<tr.length;i++){let s=0;for(let j=0;j<p;j++)s+=tr[i-j];atrV[i]=s/p;}return atrV;}
+    function adx(h,l,c,p=14){const tr=h.map((v,i)=>{if(i===0)return v-l[i];const pc=c[i-1];return Math.max(v-l[i],Math.abs(v-pc),Math.abs(l[i]-pc));});const plusDM=h.map((v,i)=>{if(i===0)return 0;const up=v-h[i-1],down=l[i-1]-l[i];return up>down&&up>0?up:0;});const minusDM=l.map((v,i)=>{if(i===0)return 0;const down=l[i-1]-v,up=h[i]-h[i-1];return down>up&&down>0?down:0;});const smooth=(arr,per)=>{const res=new Array(arr.length).fill(NaN);for(let i=per-1;i<arr.length;i++){let s=0;for(let j=0;j<per;j++)s+=arr[i-j];res[i]=s/per;}return res;};const atrSm=smooth(tr,p);const plusDI=plusDM.map((v,i)=>atrSm[i]?100*(smooth(plusDM,p)[i]/atrSm[i]):NaN);const minusDI=minusDM.map((v,i)=>atrSm[i]?100*(smooth(minusDM,p)[i]/atrSm[i]):NaN);const dx=plusDI.map((v,i)=>{const m=minusDI[i];if(isNaN(v)||isNaN(m)||v+m===0)return NaN;return 100*Math.abs(v-m)/(v+m);});return sma(dx,p);}
+    function bbw(c,p=20,s=2){const mid=sma(c,p);const w=new Array(c.length).fill(NaN);for(let i=p-1;i<c.length;i++){let sq=0;for(let j=0;j<p;j++){const d=c[i-j]-mid[i];sq+=d*d;}const sd=Math.sqrt(sq/p);w[i]=(mid[i]+s*sd-(mid[i]-s*sd))/mid[i]*100;}return w;}
+
+    // ---------- 超柔軟CSVパーサ ----------
+    function parseFlexibleCSV(text) {
+        const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+        if (lines.length < 2) return [];
+        let delim = ',';
+        if (lines[0].includes(';')) delim = ';';
+        else if (lines[0].includes('\t')) delim = '\t';
+        
+        let headerIdx = -1;
+        for (let i = 0; i < Math.min(20, lines.length); i++) {
+            const row = lines[i].split(delim).map(cell => cell.trim().toLowerCase());
+            const hasDate = row.some(cell => /取引日|date|日付/.test(cell));
+            const hasOpen = row.some(cell => /始値|open/.test(cell));
+            const hasHigh = row.some(cell => /高値|high/.test(cell));
+            const hasLow = row.some(cell => /安値|low/.test(cell));
+            const hasClose = row.some(cell => /終値|close/.test(cell));
+            if ((hasDate && hasOpen) || (hasOpen && hasHigh && hasLow && hasClose)) {
+                headerIdx = i;
+                break;
+            }
+        }
+        
+        let colIdx = { date: -1, open: -1, high: -1, low: -1, close: -1 };
+        let dataStart = 0;
+        
+        if (headerIdx !== -1) {
+            const headers = lines[headerIdx].split(delim).map(cell => cell.trim().toLowerCase());
+            colIdx.date = headers.findIndex(cell => /取引日|date|日付/.test(cell));
+            colIdx.open = headers.findIndex(cell => /始値|open/.test(cell));
+            colIdx.high = headers.findIndex(cell => /高値|high/.test(cell));
+            colIdx.low = headers.findIndex(cell => /安値|low/.test(cell));
+            colIdx.close = headers.findIndex(cell => /終値|close/.test(cell));
+            dataStart = headerIdx + 1;
+        } else {
+            colIdx = { date:0, open:1, high:2, low:3, close:4 };
+            dataStart = 0;
+        }
+        
+        const candles = [];
+        for (let i = dataStart; i < lines.length; i++) {
+            const cols = lines[i].split(delim);
+            if (cols.length < 5) continue;
+            
+            let dateStr = '';
+            let open=NaN, high=NaN, low=NaN, close=NaN;
+            
+            if (colIdx.date !== -1 && colIdx.date < cols.length) {
+                dateStr = cols[colIdx.date].trim();
+            } else {
+                const maybeDateIdx = cols.findIndex(c => c.includes('/') && c.match(/\d{4}\/\d{2}\/\d{2}/));
+                if (maybeDateIdx !== -1) colIdx.date = maybeDateIdx;
+                else colIdx.date = 0;
+                dateStr = cols[colIdx.date]?.trim() || '';
+            }
+            
+            if (colIdx.open !== -1 && colIdx.open < cols.length) open = parseFloat(cols[colIdx.open]);
+            if (colIdx.high !== -1 && colIdx.high < cols.length) high = parseFloat(cols[colIdx.high]);
+            if (colIdx.low !== -1 && colIdx.low < cols.length) low = parseFloat(cols[colIdx.low]);
+            if (colIdx.close !== -1 && colIdx.close < cols.length) close = parseFloat(cols[colIdx.close]);
+            
+            if (isNaN(open) || isNaN(high) || isNaN(low) || isNaN(close)) continue;
+            
+            let date = dateStr.replace(/\//g, '-');
+            if (!date.match(/\d{4}-\d{1,2}-\d{1,2}/)) {
+                const parts = dateStr.split(/[\/\-]/);
+                if (parts.length === 3) {
+                    if (parts[0].length === 4) date = `${parts[0]}-${parts[1].padStart(2,'0')}-${parts[2].padStart(2,'0')}`;
+                    else if (parts[2].length === 4) date = `${parts[2]}-${parts[0].padStart(2,'0')}-${parts[1].padStart(2,'0')}`;
+                }
+            }
+            if (!date.match(/\d{4}-\d{2}-\d{2}/)) continue;
+            
+            candles.push({ date, open, high, low, close });
+        }
+        return candles;
+    }
+    
+    let allCandles = [];
+    let loadedFiles = {};
+    
+    function addFiles(fileList) {
+        const statusDiv = document.getElementById('statusMsg');
+        Array.from(fileList).forEach(file => {
+            const reader = new FileReader();
+            reader.onload = e => {
+                const text = e.target.result;
+                const candles = parseFlexibleCSV(text);
+                loadedFiles[file.name] = candles;
+                statusDiv.innerHTML = `📄 ${file.name}: ${candles.length}本読み込み`;
+                const all = Object.values(loadedFiles).flat();
+                const unique = new Map();
+                all.forEach(c => unique.set(c.date, c));
+                allCandles = Array.from(unique.values()).sort((a,b)=>new Date(a.date)-new Date(b.date));
+                updateFileListUI();
+                document.getElementById('calcBtn').disabled = (allCandles.length < 20);
+                if (allCandles.length === 0) statusDiv.innerHTML += ' ⚠️ 有効なデータが見つかりません。CSVの列構成を確認してください。';
+            };
+            reader.readAsText(file, 'UTF-8');
+        });
+    }
+    
+    function updateFileListUI() {
+        const container = document.getElementById('fileList');
+        if (Object.keys(loadedFiles).length === 0) {
+            container.innerHTML = '';
+            return;
+        }
+        container.innerHTML = Object.entries(loadedFiles).map(([name, arr]) => 
+            `<span class="file-chip">${name} (${arr.length})</span>`
+        ).join('');
+    }
+    
+    function computeAndShow() {
+        if (allCandles.length < 14) return;
+        const dates = allCandles.map(c=>c.date);
+        const open = allCandles.map(c=>c.open);
+        const high = allCandles.map(c=>c.high);
+        const low = allCandles.map(c=>c.low);
+        const close = allCandles.map(c=>c.close);
+        const cciV = cci(high,low,close,14);
+        const atrV = atr(high,low,close,14);
+        const adxV = adx(high,low,close,14);
+        const bbwV = bbw(close,20,2);
+        
+        // --- 追加: MA50, MA200, および傾き（20日前との差） ---
+        const ma50 = sma(close, 50);
+        const ma200 = sma(close, 200);
+        const ma50Slope = new Array(close.length).fill(NaN);
+        const ma200Slope = new Array(close.length).fill(NaN);
+        for (let i = 0; i < close.length; i++) {
+            if (i >= 49 && i >= 20) { // MA50が有効で、20日前が存在する
+                const prevIdx = i - 20;
+                if (!isNaN(ma50[i]) && !isNaN(ma50[prevIdx])) {
+                    ma50Slope[i] = ma50[i] - ma50[prevIdx];
+                }
+            }
+            if (i >= 199 && i >= 20) { // MA200が有効で、20日前が存在する
+                const prevIdx = i - 20;
+                if (!isNaN(ma200[i]) && !isNaN(ma200[prevIdx])) {
+                    ma200Slope[i] = ma200[i] - ma200[prevIdx];
+                }
+            }
+        }
+        
+        // テーブル表示（列を追加）
+        const thead = document.getElementById('tableHeader');
+        const tbody = document.getElementById('tableBody');
+        thead.innerHTML = `<tr><th>日付</th><th>始値</th><th>高値</th><th>安値</th><th>終値</th><th>MA50</th><th>MA50傾き</th><th>MA200</th><th>MA200傾き</th><th>CCI(14)</th><th>ATR(14)</th><th>ADX(14)</th><th>BB幅%</th></tr>`;
+        tbody.innerHTML = '';
+        for (let i=0; i<dates.length; i++) {
+            const cciClass = cciV[i] > 100 ? 'positive' : (cciV[i] < -100 ? 'negative' : '');
+            tbody.insertAdjacentHTML('beforeend', `<tr>
+                <td>${dates[i]}</td>
+                <td>${open[i].toFixed(5)}</td>
+                <td>${high[i].toFixed(5)}</td>
+                <td>${low[i].toFixed(5)}</td>
+                <td>${close[i].toFixed(5)}</td>
+                <td>${isNaN(ma50[i]) ? '-' : ma50[i].toFixed(5)}</td>
+                <td>${isNaN(ma50Slope[i]) ? '-' : ma50Slope[i].toFixed(5)}</td>
+                <td>${isNaN(ma200[i]) ? '-' : ma200[i].toFixed(5)}</td>
+                <td>${isNaN(ma200Slope[i]) ? '-' : ma200Slope[i].toFixed(5)}</td>
+                <td class="${cciClass}">${isNaN(cciV[i]) ? '-' : cciV[i].toFixed(2)}</td>
+                <td>${isNaN(atrV[i]) ? '-' : atrV[i].toFixed(5)}</td>
+                <td>${isNaN(adxV[i]) ? '-' : adxV[i].toFixed(2)}</td>
+                <td>${isNaN(bbwV[i]) ? '-' : bbwV[i].toFixed(2)}</td>
+            </tr>`);
+        }
+        
+        // テキスト生成（列を追加）
+        let txt = `===== EURUSD日足オシレーター + 移動平均(MA50/MA200)計算結果 =====\n`;
+        txt += `データ期間: ${dates[0]} ～ ${dates[dates.length-1]}, 総数: ${dates.length}\n`;
+        txt += `指標: MA50, MA50傾き(20日差), MA200, MA200傾き(20日差), CCI(14), ATR(14), ADX(14), BB幅(20,2)%\n\n`;
+        txt += `日付\t始値\t高値\t安値\t終値\tMA50\tMA50傾き\tMA200\tMA200傾き\tCCI\tATR\tADX\tBB幅(%)\n`;
+        for (let i=0; i<dates.length; i++) {
+            txt += `${dates[i]}\t${open[i].toFixed(5)}\t${high[i].toFixed(5)}\t${low[i].toFixed(5)}\t${close[i].toFixed(5)}\t`;
+            txt += `${isNaN(ma50[i])?'-':ma50[i].toFixed(5)}\t${isNaN(ma50Slope[i])?'-':ma50Slope[i].toFixed(5)}\t`;
+            txt += `${isNaN(ma200[i])?'-':ma200[i].toFixed(5)}\t${isNaN(ma200Slope[i])?'-':ma200Slope[i].toFixed(5)}\t`;
+            txt += `${isNaN(cciV[i])?'-':cciV[i].toFixed(2)}\t${isNaN(atrV[i])?'-':atrV[i].toFixed(5)}\t`;
+            txt += `${isNaN(adxV[i])?'-':adxV[i].toFixed(2)}\t${isNaN(bbwV[i])?'-':bbwV[i].toFixed(2)}\n`;
+        }
+        document.getElementById('exportText').value = txt;
+        document.getElementById('resultCard').style.display = 'block';
+    }
+    
+    // イベント設定
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    dropZone.addEventListener('click', () => fileInput.click());
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); addFiles(e.dataTransfer.files); });
+    fileInput.addEventListener('change', e => addFiles(e.target.files));
+    document.getElementById('calcBtn').addEventListener('click', computeAndShow);
+    document.getElementById('clearBtn').addEventListener('click', () => { loadedFiles = {}; allCandles = []; updateFileListUI(); document.getElementById('calcBtn').disabled = true; document.getElementById('resultCard').style.display = 'none'; document.getElementById('statusMsg').innerHTML = ''; fileInput.value = ''; });
+    document.getElementById('copyBtn').addEventListener('click', () => { const ta = document.getElementById('exportText'); ta.select(); navigator.clipboard.writeText(ta.value); alert('コピーしました'); });
+</script>
+</body>
+</html>
