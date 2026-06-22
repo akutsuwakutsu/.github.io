@@ -23,7 +23,7 @@
 </head>
 <body>
 <div class="card">
-    <h2>📊 EURUSD 日足オシレーター + 移動平均（MA50/MA200）</h2>
+    <h2>📊 日足オシレーター + 移動平均（MA50/MA200）</h2>
     <p>✅ 列名が「商品名,商品タイプ,取引日,始値,高値,安値,終値」でもOK</p>
     <div class="drop-zone" id="dropZone">
         📂 CSVファイルをドロップ（複数可）<br>
@@ -221,7 +221,7 @@
         }
         
         // テキスト生成（列を追加）
-        let txt = `===== EURUSD日足オシレーター + 移動平均(MA50/MA200)計算結果 =====\n`;
+        let txt = `===== 日足オシレーター + 移動平均(MA50/MA200)計算結果 =====\n`;
         txt += `データ期間: ${dates[0]} ～ ${dates[dates.length-1]}, 総数: ${dates.length}\n`;
         txt += `指標: MA50, MA50傾き(20日差), MA200, MA200傾き(20日差), CCI(14), ATR(14), ADX(14), BB幅(20,2)%\n\n`;
         txt += `日付\t始値\t高値\t安値\t終値\tMA50\tMA50傾き\tMA200\tMA200傾き\tCCI\tATR\tADX\tBB幅(%)\n`;
