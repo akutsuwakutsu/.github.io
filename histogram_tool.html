@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>通貨ペア自動判別 期間別オシレーター分布（ATR動的バケット）</title>
+    <style>
+        *{box-sizing:border-box;}
+        body{background:#0f1117;color:#e2e6f0;font-family:system-ui,sans-serif;padding:20px;}
+        .card{background:#171b24;border:0.5px solid #2a3040;border-radius:12px;padding:20px;margin-bottom:24px;}
+        button{background:#4a90d9;border:none;color:#fff;padding:8px 18px;border-radius:8px;cursor:pointer;margin-right:8px;font-weight:bold;}
+        button.secondary{background:#3b4254;}
+        button:disabled{opacity:0.4;}
+        .drop-zone{border:1.5px dashed #2a3040;border-radius:12px;padding:24px;text-align:center;cursor:pointer;background:#0f1117;}
+        .drop-zone.drag-over{border-color:#4a90d9;background:#1a1f2c;}
+        .file-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;justify-content:center;}
+        .file-chip{background:#1e2330;padding:4px 10px;border-radius:20px;font-size:11px;}
+        .histogram-container{margin-bottom:28px;border-bottom:0.5px solid #2a3040;padding-bottom:16px;}
+        .histogram-title{font-weight:bold;margin-bottom:8px;color:#b9c2d4;}
+        .histogram-bars{display:flex;align-items:flex-end;height:130px;gap:3px;margin-top:8px;flex-wrap:wrap;}
+        .bar{background:#4a90d9;width:36px;text-align:center;font-size:9px;color:#fff;transition:0.1s;}
+        .bar-label{font-size:9px;text-align:center;width:36px;margin-top:4px;word-break:keep-all;}
+        .stats-row{font-size:11px;color:#8891a8;margin:8px 0;}
+        .select-indicator{margin-bottom:16px;}
+        textarea{width:100%;background:#0f1117;border:0.5px solid #2a3040;color:#e2e6f0;font-family:monospace;padding:8px;border-radius:8px;margin-top:12px;}
+        .periods-area textarea{font-family:monospace;font-size:11px;height:150px;}
+        .flex{display:flex;gap:12px;flex-wrap:wrap;justify-content:space-between;}
+        .status{font-size:12px;margin-top:8px;}
+    </style>
+</head>
+<body>
+<div class="card">
+    <h2>📊 期間別オシレーター分布（ATRバケット自動切替）</h2>
+    <p>✅ CSVデータから通貨ペアの価格桁数を自動判定し、ATRのヒストグラム階級を最適化（USDJPYなど3桁通貨対応）</p>
+    <div class="drop-zone" id="dropZone">
+        📂 CSVファイルをドロップ（複数可・自動マージ）<br>
+        <span style="font-size:12px;">またはクリックして選択</span>
+        <input type="file" id="fileInput" accept=".csv" multiple style="display:none;">
+        <div class="file-list" id="fileList"></div>
+    </div>
+    <div id="loadStatus" class="status"></div>
+    <div class="flex" style="margin-top:16px;">
+        <div>
+            <button id="calcBtn" disabled>🔄 オシレーター計算＆分布表示</button>
+            <button id="clearBtn" class="secondary">🗑️ 全クリア</button>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="flex">
+        <h3>📅 期間ラベル定義（境界含む）</h3>
+        <button id="resetPeriodsBtn" class="secondary">デフォルト7期間にリセット</button>
+    </div>
+    <div class="periods-area">
+        <textarea id="periodsText" rows="5" style="font-family:monospace;font-size:12px;"></textarea>
+        <div class="status">1行 = 開始日(YYYY-MM-DD), 終了日(YYYY-MM-DD), ラベル名</div>
+    </div>
+</div>
+
+<div class="card" id="distributionCard" style="display:none;">
+    <div class="flex">
+        <h3>📊 オシレーター分布ヒストグラム</h3>
+        <button id="copyDistBtn">📋 分布データをテキストコピー</button>
+    </div>
+    <div class="select-indicator">
+        <label>表示する指標：</label>
+        <select id="indicatorSelect">
+            <option value="cci">CCI(14)</option>
+            <option value="atr">ATR(14) ←自動調整バケット</option>
+            <option value="adx">ADX(14)</option>
+            <option value="bbw">BB幅(20,2)%</option>
+        </select>
+    </div>
+    <div id="histogramsContainer"></div>
+    <textarea id="distText" rows="8" readonly placeholder="各期間の分布データがテキストで表示されます"></textarea>
+</div>
+
+<script>
+    // ---------- テクニカル関数（同じ） ----------
+    function sma(arr,p){const r=new Array(arr.length).fill(NaN);for(let i=p-1;i<arr.length;i++){let s=0;for(let j=0;j<p;j++)s+=arr[i-j];r[i]=s/p;}return r;}
+    function cci(h,l,c,p=14){const tp=h.map((v,i)=>(v+l[i]+c[i])/3);const smaTP=sma(tp,p);const mad=new Array(tp.length).fill(NaN);for(let i=p-1;i<tp.length;i++){let sum=0;for(let j=0;j<p;j++)sum+=Math.abs(tp[i-j]-smaTP[i]);mad[i]=sum/p;}return tp.map((v,i)=>i<p-1||mad[i]===0?NaN:(v-smaTP[i])/(0.015*mad[i]));}
+    function atr(h,l,c,p=14){const tr=h.map((v,i)=>{if(i===0)return v-l[i];const pc=c[i-1];return Math.max(v-l[i],Math.abs(v-pc),Math.abs(l[i]-pc));});const atrV=new Array(tr.length).fill(NaN);for(let i=p-1;i<tr.length;i++){let s=0;for(let j=0;j<p;j++)s+=tr[i-j];atrV[i]=s/p;}return atrV;}
+    function adx(h,l,c,p=14){const tr=h.map((v,i)=>{if(i===0)return v-l[i];const pc=c[i-1];return Math.max(v-l[i],Math.abs(v-pc),Math.abs(l[i]-pc));});const plusDM=h.map((v,i)=>{if(i===0)return 0;const up=v-h[i-1],down=l[i-1]-l[i];return up>down&&up>0?up:0;});const minusDM=l.map((v,i)=>{if(i===0)return 0;const down=l[i-1]-v,up=h[i]-h[i-1];return down>up&&down>0?down:0;});const smooth=(arr,per)=>{const res=new Array(arr.length).fill(NaN);for(let i=per-1;i<arr.length;i++){let s=0;for(let j=0;j<per;j++)s+=arr[i-j];res[i]=s/per;}return res;};const atrSm=smooth(tr,p);const plusDI=plusDM.map((v,i)=>atrSm[i]?100*(smooth(plusDM,p)[i]/atrSm[i]):NaN);const minusDI=minusDM.map((v,i)=>atrSm[i]?100*(smooth(minusDM,p)[i]/atrSm[i]):NaN);const dx=plusDI.map((v,i)=>{const m=minusDI[i];if(isNaN(v)||isNaN(m)||v+m===0)return NaN;return 100*Math.abs(v-m)/(v+m);});return sma(dx,p);}
+    function bbw(c,p=20,s=2){const mid=sma(c,p);const w=new Array(c.length).fill(NaN);for(let i=p-1;i<c.length;i++){let sq=0;for(let j=0;j<p;j++){const d=c[i-j]-mid[i];sq+=d*d;}const sd=Math.sqrt(sq/p);w[i]=(mid[i]+s*sd-(mid[i]-s*sd))/mid[i]*100;}return w;}
+
+    // --- 通貨ペアの価格桁数を自動判定（終値のサンプルを確認）---
+    let decimalPlaces = 5; // デフォルトEURUSD想定
+    function detectDecimalPlaces(candles) {
+        if(!candles.length) return 5;
+        // 最初の20本の終値から小数点以下の桁数をカウント
+        let totalDigits = 0;
+        let sampleCount = 0;
+        for(let i=0; i<Math.min(20, candles.length); i++){
+            const closeStr = candles[i].close.toString();
+            if(closeStr.includes('.')){
+                const digits = closeStr.split('.')[1].length;
+                totalDigits += digits;
+                sampleCount++;
+            }
+        }
+        if(sampleCount === 0) return 5;
+        const avgDigits = totalDigits / sampleCount;
+        // 平均桁数が4以上なら5桁通貨、3以下なら3桁通貨と判定（2.5などの中間は5桁としておく）
+        return avgDigits >= 3.5 ? 5 : 3;
+    }
+
+    // CSVパーサ（同一）
+    function parseCSV(text) {
+        const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
+        if(lines.length<2) return [];
+        let delim = ',';
+        if(lines[0].includes(';')) delim=';';
+        else if(lines[0].includes('\t')) delim='\t';
+        let headerIdx = -1;
+        for(let i=0;i<Math.min(20,lines.length);i++){
+            const row = lines[i].split(delim).map(c=>c.trim().toLowerCase());
+            if(row.some(c=>/取引日|date|日付/.test(c)) && row.some(c=>/始値|open/.test(c))){
+                headerIdx=i; break;
+            }
+        }
+        let colIdx = {date:-1, open:-1, high:-1, low:-1, close:-1};
+        let dataStart = 0;
+        if(headerIdx !== -1){
+            const headers = lines[headerIdx].split(delim).map(c=>c.trim().toLowerCase());
+            colIdx.date = headers.findIndex(c=>/取引日|date|日付/.test(c));
+            colIdx.open = headers.findIndex(c=>/始値|open/.test(c));
+            colIdx.high = headers.findIndex(c=>/高値|high/.test(c));
+            colIdx.low = headers.findIndex(c=>/安値|low/.test(c));
+            colIdx.close = headers.findIndex(c=>/終値|close/.test(c));
+            dataStart = headerIdx+1;
+        } else {
+            colIdx = {date:0, open:1, high:2, low:3, close:4};
+            dataStart = 0;
+        }
+        const candles = [];
+        for(let i=dataStart; i<lines.length; i++){
+            const cols = lines[i].split(delim);
+            if(cols.length <= Math.max(...Object.values(colIdx))) continue;
+            let dateStr = cols[colIdx.date]?.trim() || '';
+            let date = dateStr.replace(/\//g,'-');
+            if(!date.match(/\d{4}-\d{1,2}-\d{1,2}/)){
+                const parts = dateStr.split(/[\/\-]/);
+                if(parts.length===3){
+                    if(parts[0].length===4) date = `${parts[0]}-${parts[1].padStart(2,'0')}-${parts[2].padStart(2,'0')}`;
+                    else if(parts[2].length===4) date = `${parts[2]}-${parts[0].padStart(2,'0')}-${parts[1].padStart(2,'0')}`;
+                }
+            }
+            const open = parseFloat(cols[colIdx.open]);
+            const high = parseFloat(cols[colIdx.high]);
+            const low = parseFloat(cols[colIdx.low]);
+            const close = parseFloat(cols[colIdx.close]);
+            if(isNaN(open)||isNaN(high)||isNaN(low)||isNaN(close)) continue;
+            if(!date.match(/\d{4}-\d{2}-\d{2}/)) continue;
+            candles.push({date, open, high, low, close});
+        }
+        return candles;
+    }
+    
+    // データ管理
+    let allCandles = [];
+    let computed = [];
+    let loadedFiles = {};
+    
+    const DEFAULT_PERIODS = [
+        "2022-01-03,2022-09-28,下落トレンド",
+        "2022-09-28,2023-07-17,上昇トレンド",
+        "2023-07-17,2024-11-18,レンジ",
+        "2024-09-25,2025-01-13,下落トレンド",
+        "2024-11-18,2025-03-03,下抜けダマシ",
+        "2025-01-13,2026-01-27,上昇トレンド",
+        "2026-01-27,2026-06-12,レンジ（継続中）"
+    ];
+    
+    const periodsTextarea = document.getElementById('periodsText');
+    periodsTextarea.value = DEFAULT_PERIODS.join('\n');
+    document.getElementById('resetPeriodsBtn').addEventListener('click',()=>{
+        periodsTextarea.value = DEFAULT_PERIODS.join('\n');
+    });
+    
+    function addFiles(fileList){
+        const statusDiv = document.getElementById('loadStatus');
+        Array.from(fileList).forEach(file=>{
+            const reader = new FileReader();
+            reader.onload = e=>{
+                const candles = parseCSV(e.target.result);
+                loadedFiles[file.name] = candles;
+                statusDiv.innerHTML = `✅ ${file.name} → ${candles.length}本`;
+                const all = Object.values(loadedFiles).flat();
+                const unique = new Map();
+                all.forEach(c=>unique.set(c.date,c));
+                allCandles = Array.from(unique.values()).sort((a,b)=>new Date(a.date)-new Date(b.date));
+                // 通貨ペアの桁数を自動判定
+                decimalPlaces = detectDecimalPlaces(allCandles);
+                statusDiv.innerHTML += ` （価格桁数: ${decimalPlaces}桁 → ATRバケット${decimalPlaces===5?'0.001刻み':'0.05刻み'}）`;
+                updateFileListUI();
+                document.getElementById('calcBtn').disabled = (allCandles.length < 20);
+            };
+            reader.readAsText(file,'UTF-8');
+        });
+    }
+    
+    function updateFileListUI(){
+        const container = document.getElementById('fileList');
+        if(Object.keys(loadedFiles).length===0){
+            container.innerHTML = '';
+            return;
+        }
+        container.innerHTML = Object.entries(loadedFiles).map(([name,arr])=>`<span class="file-chip">${name} (${arr.length})</span>`).join('');
+    }
+    
+    // ヒストグラム生成（バケットは指標ごとに最適化、ATRは通貨桁数で動的変更）
+    function histogram(values, bins) {
+        const hist = new Array(bins.length-1).fill(0);
+        values.forEach(v => {
+            if(isNaN(v)) return;
+            for(let i=0; i<bins.length-1; i++){
+                if(v >= bins[i] && v < bins[i+1]){
+                    hist[i]++;
+                    break;
+                }
+            }
+        });
+        const total = values.filter(v=>!isNaN(v)).length;
+        return {hist, total, bins};
+    }
+    
+    function getBins(indicator, values){
+        if(indicator === 'cci'){
+            return [-200,-150,-100,-50,0,50,100,150,200,250];
+        } else if(indicator === 'atr'){
+            if(decimalPlaces === 5){
+                // EURUSDなど5桁通貨: 0.0005～0.02 をカバーする0.001刻み
+                return [0, 0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007, 0.008, 0.009, 0.010, 0.012, 0.014, 0.016, 0.018, 0.020];
+            } else {
+                // USDJPYなど3桁通貨: 0.05～2.0 程度をカバーする0.05刻み
+                return [0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70, 0.80, 0.90, 1.00, 1.20, 1.40, 1.60, 1.80, 2.00];
+            }
+        } else if(indicator === 'adx'){
+            return [0,10,15,20,25,30,35,40,45,50,60];
+        } else if(indicator === 'bbw'){
+            return [0,0.5,1,1.5,2,2.5,3,3.5,4,4.5,5,6];
+        }
+        return [];
+    }
+    
+    function median(arr){
+        const sorted = [...arr].sort((a,b)=>a-b);
+        const mid = Math.floor(sorted.length/2);
+        return sorted.length%2===0 ? (sorted[mid-1]+sorted[mid])/2 : sorted[mid];
+    }
+    function stdDev(arr){
+        const mean = arr.reduce((a,b)=>a+b,0)/arr.length;
+        const sq = arr.map(v=>Math.pow(v-mean,2));
+        return Math.sqrt(sq.reduce((a,b)=>a+b,0)/arr.length);
+    }
+    
+    function formatValue(indicator, val){
+        if(indicator === 'atr') return val.toFixed(decimalPlaces === 5 ? 5 : 3);
+        if(indicator === 'cci') return val.toFixed(1);
+        if(indicator === 'adx') return val.toFixed(1);
+        if(indicator === 'bbw') return val.toFixed(2);
+        return val.toString();
+    }
+    
+    function renderHistograms(periodsData, indicator){
+        const container = document.getElementById('histogramsContainer');
+        container.innerHTML = '';
+        let allText = `===== 期間別 ${indicator.toUpperCase()} 分布 =====\n`;
+        allText += `（通貨桁数: ${decimalPlaces}桁、ATRバケットは${decimalPlaces===5?'0.001刻み':'0.05刻み'}）\n\n`;
+        
+        for(let p of periodsData){
+            const values = p.values.filter(v=>!isNaN(v));
+            if(values.length === 0){
+                container.innerHTML += `<div class="histogram-container"><div class="histogram-title">${p.label} (${p.period}) : データなし</div></div>`;
+                continue;
+            }
+            const bins = getBins(indicator, values);
+            const {hist, total} = histogram(values, bins);
+            const maxCount = Math.max(...hist,1);
+            const avgVal = values.reduce((a,b)=>a+b,0)/values.length;
+            const medVal = median(values);
+            const stdVal = stdDev(values);
+            
+            // グラフ描画
+            let barsHtml = `<div class="histogram-container"><div class="histogram-title">📊 ${p.label} (${p.period})  n=${total}</div>`;
+            barsHtml += `<div class="stats-row">平均: ${formatValue(indicator, avgVal)} | 中央値: ${formatValue(indicator, medVal)} | 標準偏差: ${formatValue(indicator, stdVal)}</div>`;
+            barsHtml += `<div class="histogram-bars" style="align-items:flex-end;">`;
+            for(let i=0; i<hist.length; i++){
+                const height = (hist[i] / maxCount) * 100;
+                let binLabel = `${bins[i].toFixed(3)}~${bins[i+1].toFixed(3)}`;
+                if(indicator === 'cci') binLabel = `${bins[i].toFixed(0)}~${bins[i+1].toFixed(0)}`;
+                if(indicator === 'adx') binLabel = `${bins[i].toFixed(0)}~${bins[i+1].toFixed(0)}`;
+                if(indicator === 'bbw') binLabel = `${bins[i].toFixed(1)}~${bins[i+1].toFixed(1)}`;
+                if(indicator === 'atr' && decimalPlaces !== 5) binLabel = `${bins[i].toFixed(2)}~${bins[i+1].toFixed(2)}`;
+                barsHtml += `<div style="display:flex;flex-direction:column;align-items:center;width:42px;"><div class="bar" style="height:${height}px;background:#4a90d9;">${hist[i]}</div><div class="bar-label">${binLabel}</div></div>`;
+            }
+            barsHtml += `</div></div>`;
+            container.innerHTML += barsHtml;
+            
+            // テキスト出力用
+            allText += `【${p.label}】 (${p.period})\n`;
+            allText += `総数: ${total}, 平均: ${formatValue(indicator, avgVal)}, 中央値: ${formatValue(indicator, medVal)}, 標準偏差: ${formatValue(indicator, stdVal)}\n`;
+            allText += `分布:\n`;
+            for(let i=0; i<hist.length; i++){
+                const pct = (hist[i]/total*100).toFixed(1);
+                let binLabel = `${bins[i].toFixed(3)}～${bins[i+1].toFixed(3)}`;
+                if(indicator === 'cci') binLabel = `${bins[i].toFixed(0)}～${bins[i+1].toFixed(0)}`;
+                if(indicator === 'adx') binLabel = `${bins[i].toFixed(0)}～${bins[i+1].toFixed(0)}`;
+                if(indicator === 'bbw') binLabel = `${bins[i].toFixed(1)}～${bins[i+1].toFixed(1)}`;
+                if(indicator === 'atr' && decimalPlaces !== 5) binLabel = `${bins[i].toFixed(2)}～${bins[i+1].toFixed(2)}`;
+                allText += `  ${binLabel} : ${hist[i]}回 (${pct}%)\n`;
+            }
+            allText += `\n`;
+        }
+        document.getElementById('distText').value = allText;
+    }
+    
+    function computeAndShowDist(){
+        if(allCandles.length < 14) return;
+        const dates = allCandles.map(c=>c.date);
+        const open = allCandles.map(c=>c.open);
+        const high = allCandles.map(c=>c.high);
+        const low = allCandles.map(c=>c.low);
+        const close = allCandles.map(c=>c.close);
+        const cciV = cci(high,low,close,14);
+        const atrV = atr(high,low,close,14);
+        const adxV = adx(high,low,close,14);
+        const bbwV = bbw(close,20,2);
+        
+        computed = dates.map((d,i)=>({
+            date:d, open:open[i], high:high[i], low:low[i], close:close[i],
+            cci:cciV[i], atr:atrV[i], adx:adxV[i], bbw:bbwV[i]
+        }));
+        
+        // 期間抽出
+        const periodsText = periodsTextarea.value;
+        const lines = periodsText.split(/\r?\n/).filter(l=>l.trim().length>0);
+        const periods = [];
+        for(let line of lines){
+            const parts = line.split(',').map(s=>s.trim());
+            if(parts.length<3) continue;
+            const [start,end,label] = parts;
+            if(!start.match(/\d{4}-\d{2}-\d{2}/) || !end.match(/\d{4}-\d{2}-\d{2}/)) continue;
+            periods.push({start,end,label});
+        }
+        
+        const indicator = document.getElementById('indicatorSelect').value;
+        const periodsData = [];
+        for(let p of periods){
+            const filtered = computed.filter(c => c.date >= p.start && c.date <= p.end);
+            const values = filtered.map(c=>c[indicator]).filter(v=>!isNaN(v));
+            periodsData.push({
+                label: p.label,
+                period: `${p.start}～${p.end}`,
+                values: values
+            });
+        }
+        renderHistograms(periodsData, indicator);
+        document.getElementById('distributionCard').style.display = 'block';
+    }
+    
+    // イベント
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    dropZone.addEventListener('click',()=>fileInput.click());
+    dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('drag-over');});
+    dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('drag-over');addFiles(e.dataTransfer.files);});
+    fileInput.addEventListener('change',e=>addFiles(e.target.files));
+    document.getElementById('calcBtn').addEventListener('click',computeAndShowDist);
+    document.getElementById('clearBtn').addEventListener('click',()=>{
+        loadedFiles={}; allCandles=[]; computed=[];
+        updateFileListUI();
+        document.getElementById('calcBtn').disabled=true;
+        document.getElementById('distributionCard').style.display='none';
+        document.getElementById('loadStatus').innerHTML='';
+        fileInput.value='';
+    });
+    document.getElementById('copyDistBtn').addEventListener('click',()=>{
+        const ta = document.getElementById('distText');
+        ta.select();
+        navigator.clipboard.writeText(ta.value);
+        alert('コピーしました');
+    });
+    document.getElementById('indicatorSelect').addEventListener('change',()=>{
+        if(computed.length) computeAndShowDist();
+    });
+</script>
+</body>
+</html>
