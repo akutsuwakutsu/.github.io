@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>ドル円 相場状態クラスタリング（トレンド/レンジ自動判別）</title>
+    <style>
+        *{box-sizing:border-box;}
+        body{background:#0f1117;color:#e2e6f0;font-family:system-ui,sans-serif;padding:20px;}
+        .card{background:#171b24;border:0.5px solid #2a3040;border-radius:12px;padding:20px;margin-bottom:24px;}
+        button{background:#4a90d9;border:none;color:#fff;padding:8px 18px;border-radius:8px;cursor:pointer;margin-right:8px;font-weight:bold;}
+        button.secondary{background:#3b4254;}
+        .drop-zone{border:1.5px dashed #2a3040;border-radius:12px;padding:24px;text-align:center;cursor:pointer;background:#0f1117;margin-bottom:16px;}
+        .drop-zone.drag-over{border-color:#4a90d9;background:#1a1f2c;}
+        .file-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;justify-content:center;}
+        .file-chip{background:#1e2330;padding:4px 10px;border-radius:20px;font-size:11px;}
+        .flex-row{display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin-bottom:16px;}
+        select, input{background:#0f1117;border:0.5px solid #2a3040;color:#e2e6f0;padding:6px 10px;border-radius:6px;}
+        table{width:100%;border-collapse:collapse;font-size:12px;margin-top:12px;}
+        th,td{border:0.5px solid #2a3040;padding:6px 8px;text-align:center;}
+        th{background:#1e2330;}
+        .cluster-card{margin-top:20px;padding:12px;background:#1a1f2c;border-radius:8px;}
+        .cluster-title{font-weight:bold;font-size:14px;margin-bottom:8px;}
+        .status{font-size:12px;margin-top:8px;}
+        textarea{width:100%;background:#0f1117;border:0.5px solid #2a3040;color:#e2e6f0;font-family:monospace;padding:8px;border-radius:8px;margin-top:12px;font-size:11px;}
+        .btn-group{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
+    </style>
+</head>
+<body>
+<div class="card">
+    <h2>📈 ドル円 相場状態クラスタリング（トレンド/レンジを自動判別）</h2>
+    <p>✅ 日足CSV（日付,始値,高値,安値,終値）をドロップ → CCI/ATR/ADX/BB幅計算 → K-meansで期間をグループ化</p>
+    <div class="drop-zone" id="dropZone">
+        📂 CSVファイルをドロップ（複数可・自動マージ）<br>
+        <span style="font-size:12px;">またはクリックして選択</span>
+        <input type="file" id="fileInput" accept=".csv" multiple style="display:none;">
+        <div class="file-list" id="fileList"></div>
+    </div>
+    <div id="loadStatus" class="status"></div>
+    <div style="margin-top:16px;">
+        <button id="calcBtn" disabled>🔄 オシレーター計算</button>
+        <button id="clearBtn" class="secondary">🗑️ 全クリア</button>
+    </div>
+</div>
+
+<div class="card" id="clusterCard" style="display:none;">
+    <div class="flex-row">
+        <div>
+            <label>クラスタ数: </label>
+            <select id="kSelect">
+                <option value="2">2クラスタ（トレンド/レンジ）</option>
+                <option value="3">3クラスタ</option>
+                <option value="4">4クラスタ</option>
+                <option value="5">5クラスタ</option>
+            </select>
+        </div>
+        <div>
+            <label>特徴量: </label>
+            <select id="featuresSelect">
+                <option value="adx,bbw,abs_cci,atr">ADX, BB幅, |CCI|, ATR</option>
+                <option value="adx,bbw">ADX, BB幅（シンプル）</option>
+                <option value="adx,bbw,abs_cci">ADX, BB幅, |CCI|</option>
+            </select>
+        </div>
+        <button id="runClusterBtn">🎯 クラスタリング実行</button>
+    </div>
+    <div id="clusterResult"></div>
+    <div class="btn-group">
+        <button id="copyClusterTextBtn">📋 結果テキストコピー</button>
+    </div>
+    <textarea id="clusterText" rows="8" readonly></textarea>
+</div>
+
+<script>
+    // ---------- テクニカル関数（前回と同じ） ----------
+    function sma(arr,p){const r=new Array(arr.length).fill(NaN);for(let i=p-1;i<arr.length;i++){let s=0;for(let j=0;j<p;j++)s+=arr[i-j];r[i]=s/p;}return r;}
+    function cci(h,l,c,p=14){const tp=h.map((v,i)=>(v+l[i]+c[i])/3);const smaTP=sma(tp,p);const mad=new Array(tp.length).fill(NaN);for(let i=p-1;i<tp.length;i++){let sum=0;for(let j=0;j<p;j++)sum+=Math.abs(tp[i-j]-smaTP[i]);mad[i]=sum/p;}return tp.map((v,i)=>i<p-1||mad[i]===0?NaN:(v-smaTP[i])/(0.015*mad[i]));}
+    function atr(h,l,c,p=14){const tr=h.map((v,i)=>{if(i===0)return v-l[i];const pc=c[i-1];return Math.max(v-l[i],Math.abs(v-pc),Math.abs(l[i]-pc));});const atrV=new Array(tr.length).fill(NaN);for(let i=p-1;i<tr.length;i++){let s=0;for(let j=0;j<p;j++)s+=tr[i-j];atrV[i]=s/p;}return atrV;}
+    function adx(h,l,c,p=14){const tr=h.map((v,i)=>{if(i===0)return v-l[i];const pc=c[i-1];return Math.max(v-l[i],Math.abs(v-pc),Math.abs(l[i]-pc));});const plusDM=h.map((v,i)=>{if(i===0)return 0;const up=v-h[i-1],down=l[i-1]-l[i];return up>down&&up>0?up:0;});const minusDM=l.map((v,i)=>{if(i===0)return 0;const down=l[i-1]-v,up=h[i]-h[i-1];return down>up&&down>0?down:0;});const smooth=(arr,per)=>{const res=new Array(arr.length).fill(NaN);for(let i=per-1;i<arr.length;i++){let s=0;for(let j=0;j<per;j++)s+=arr[i-j];res[i]=s/per;}return res;};const atrSm=smooth(tr,p);const plusDI=plusDM.map((v,i)=>atrSm[i]?100*(smooth(plusDM,p)[i]/atrSm[i]):NaN);const minusDI=minusDM.map((v,i)=>atrSm[i]?100*(smooth(minusDM,p)[i]/atrSm[i]):NaN);const dx=plusDI.map((v,i)=>{const m=minusDI[i];if(isNaN(v)||isNaN(m)||v+m===0)return NaN;return 100*Math.abs(v-m)/(v+m);});return sma(dx,p);}
+    function bbw(c,p=20,s=2){const mid=sma(c,p);const w=new Array(c.length).fill(NaN);for(let i=p-1;i<c.length;i++){let sq=0;for(let j=0;j<p;j++){const d=c[i-j]-mid[i];sq+=d*d;}const sd=Math.sqrt(sq/p);w[i]=(mid[i]+s*sd-(mid[i]-s*sd))/mid[i]*100;}return w;}
+
+    // CSVパーサ（日付,始値,高値,安値,終値を自動検出）
+    function parseCSV(text) {
+        const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
+        if(lines.length<2) return [];
+        let delim = ',';
+        if(lines[0].includes(';')) delim=';';
+        else if(lines[0].includes('\t')) delim='\t';
+        let headerIdx = -1;
+        for(let i=0;i<Math.min(20,lines.length);i++){
+            const row = lines[i].split(delim).map(c=>c.trim().toLowerCase());
+            if(row.some(c=>/取引日|date|日付/.test(c)) && row.some(c=>/始値|open/.test(c))){
+                headerIdx=i; break;
+            }
+        }
+        let colIdx = {date:-1, open:-1, high:-1, low:-1, close:-1};
+        let dataStart = 0;
+        if(headerIdx !== -1){
+            const headers = lines[headerIdx].split(delim).map(c=>c.trim().toLowerCase());
+            colIdx.date = headers.findIndex(c=>/取引日|date|日付/.test(c));
+            colIdx.open = headers.findIndex(c=>/始値|open/.test(c));
+            colIdx.high = headers.findIndex(c=>/高値|high/.test(c));
+            colIdx.low = headers.findIndex(c=>/安値|low/.test(c));
+            colIdx.close = headers.findIndex(c=>/終値|close/.test(c));
+            dataStart = headerIdx+1;
+        } else {
+            colIdx = {date:0, open:1, high:2, low:3, close:4};
+            dataStart = 0;
+        }
+        const candles = [];
+        for(let i=dataStart; i<lines.length; i++){
+            const cols = lines[i].split(delim);
+            if(cols.length <= Math.max(...Object.values(colIdx))) continue;
+            let dateStr = cols[colIdx.date]?.trim() || '';
+            let date = dateStr.replace(/\//g,'-');
+            if(!date.match(/\d{4}-\d{1,2}-\d{1,2}/)){
+                const parts = dateStr.split(/[\/\-]/);
+                if(parts.length===3){
+                    if(parts[0].length===4) date = `${parts[0]}-${parts[1].padStart(2,'0')}-${parts[2].padStart(2,'0')}`;
+                    else if(parts[2].length===4) date = `${parts[2]}-${parts[0].padStart(2,'0')}-${parts[1].padStart(2,'0')}`;
+                }
+            }
+            const open = parseFloat(cols[colIdx.open]);
+            const high = parseFloat(cols[colIdx.high]);
+            const low = parseFloat(cols[colIdx.low]);
+            const close = parseFloat(cols[colIdx.close]);
+            if(isNaN(open)||isNaN(high)||isNaN(low)||isNaN(close)) continue;
+            if(!date.match(/\d{4}-\d{2}-\d{2}/)) continue;
+            candles.push({date, open, high, low, close});
+        }
+        return candles;
+    }
+
+    let allCandles = [];
+    let loadedFiles = {};
+    let computedData = [];   // {date, cci, atr, adx, bbw}
+
+    function updateFileListUI(){
+        const container = document.getElementById('fileList');
+        if(Object.keys(loadedFiles).length===0){
+            container.innerHTML = '';
+            return;
+        }
+        container.innerHTML = Object.entries(loadedFiles).map(([name,arr])=>`<span class="file-chip">${name} (${arr.length})</span>`).join('');
+    }
+
+    function addFiles(fileList){
+        const statusDiv = document.getElementById('loadStatus');
+        Array.from(fileList).forEach(file=>{
+            const reader = new FileReader();
+            reader.onload = e=>{
+                const candles = parseCSV(e.target.result);
+                if(candles.length===0){
+                    statusDiv.innerHTML = `⚠️ ${file.name} から有効なローソク足を検出できませんでした。`;
+                } else {
+                    loadedFiles[file.name] = candles;
+                }
+                const all = Object.values(loadedFiles).flat();
+                const unique = new Map();
+                all.forEach(c=>unique.set(c.date,c));
+                allCandles = Array.from(unique.values()).sort((a,b)=>new Date(a.date)-new Date(b.date));
+                statusDiv.innerHTML = `✅ 合計 ${allCandles.length} 本の日足データ読み込み完了`;
+                updateFileListUI();
+                document.getElementById('calcBtn').disabled = (allCandles.length < 30);
+            };
+            reader.readAsText(file,'UTF-8');
+        });
+    }
+
+    function computeOscillators(){
+        if(allCandles.length<20) return;
+        const dates = allCandles.map(c=>c.date);
+        const high = allCandles.map(c=>c.high);
+        const low = allCandles.map(c=>c.low);
+        const close = allCandles.map(c=>c.close);
+        const cciV = cci(high,low,close,14);
+        const atrV = atr(high,low,close,14);
+        const adxV = adx(high,low,close,14);
+        const bbwV = bbw(close,20,2);
+        computedData = dates.map((d,i)=>({
+            date: d,
+            cci: cciV[i],
+            atr: atrV[i],
+            adx: adxV[i],
+            bbw: bbwV[i]
+        })).filter(d=>!isNaN(d.adx) && !isNaN(d.bbw) && !isNaN(d.cci) && !isNaN(d.atr));
+        document.getElementById('clusterCard').style.display = 'block';
+        document.getElementById('loadStatus').innerHTML += ` → 有効データ ${computedData.length} 日分（オシレーター計算完了）`;
+    }
+
+    // ---------- 自前K-means実装 ----------
+    function kMeans(data, k, maxIter=100) {
+        // data: 2次元配列 (各点は数値の配列)
+        // ランダムに初期セントロイドを選択
+        let centroids = [];
+        const indices = new Set();
+        while(centroids.length < k && indices.size < data.length){
+            const rand = Math.floor(Math.random() * data.length);
+            if(!indices.has(rand)){
+                indices.add(rand);
+                centroids.push([...data[rand]]);
+            }
+        }
+        let labels = new Array(data.length).fill(0);
+        for(let iter=0; iter<maxIter; iter++){
+            // 割り当て
+            let changed = false;
+            for(let i=0; i<data.length; i++){
+                let minDist = Infinity;
+                let best = 0;
+                for(let j=0; j<k; j++){
+                    let dist = 0;
+                    for(let d=0; d<data[i].length; d++){
+                        const diff = data[i][d] - centroids[j][d];
+                        dist += diff*diff;
+                    }
+                    if(dist < minDist){
+                        minDist = dist;
+                        best = j;
+                    }
+                }
+                if(labels[i] !== best) changed = true;
+                labels[i] = best;
+            }
+            if(!changed) break;
+            // セントロイド更新
+            const newCentroids = Array(k).fill().map(()=>Array(data[0].length).fill(0));
+            const counts = Array(k).fill(0);
+            for(let i=0; i<data.length; i++){
+                const c = labels[i];
+                counts[c]++;
+                for(let d=0; d<data[i].length; d++){
+                    newCentroids[c][d] += data[i][d];
+                }
+            }
+            for(let j=0; j<k; j++){
+                if(counts[j] > 0){
+                    for(let d=0; d<data[0].length; d++){
+                        centroids[j][d] = newCentroids[j][d] / counts[j];
+                    }
+                }
+            }
+        }
+        return labels;
+    }
+
+    // 標準化関数
+    function standardize(data) {
+        const means = [];
+        const stds = [];
+        for(let i=0; i<data[0].length; i++){
+            const col = data.map(row=>row[i]);
+            const mean = col.reduce((a,b)=>a+b,0)/col.length;
+            const variance = col.map(v=>Math.pow(v-mean,2)).reduce((a,b)=>a+b,0)/col.length;
+            const stdev = Math.sqrt(variance);
+            means.push(mean);
+            stds.push(stdev === 0 ? 1 : stdev);
+        }
+        const normalized = data.map(row => row.map((v,i)=> (v - means[i]) / stds[i]));
+        return normalized;
+    }
+
+    function runClustering(){
+        const k = parseInt(document.getElementById('kSelect').value);
+        const featuresStr = document.getElementById('featuresSelect').value;
+        const featureNames = featuresStr.split(',');
+        
+        // データ行列を作成
+        const data = computedData.map(d => {
+            const row = [];
+            if(featureNames.includes('adx')) row.push(d.adx);
+            if(featureNames.includes('bbw')) row.push(d.bbw);
+            if(featureNames.includes('abs_cci')) row.push(Math.abs(d.cci));
+            if(featureNames.includes('atr')) row.push(d.atr);
+            return row;
+        });
+        
+        if(data.length === 0 || data[0].length === 0){
+            alert('データが不足しています');
+            return;
+        }
+        
+        // 標準化
+        const normalized = standardize(data);
+        // K-means実行
+        const labels = kMeans(normalized, k);
+        
+        // 各日のクラスタラベルを付与
+        const labeled = computedData.map((d, idx) => ({ ...d, cluster: labels[idx] }));
+        
+        // クラスタごとの代表統計
+        const clusterStats = {};
+        for(let i=0;i<k;i++){
+            clusterStats[i] = { adx:[], bbw:[], abs_cci:[], atr:[], dates:[] };
+        }
+        labeled.forEach(d => {
+            const c = d.cluster;
+            clusterStats[c].adx.push(d.adx);
+            clusterStats[c].bbw.push(d.bbw);
+            clusterStats[c].abs_cci.push(Math.abs(d.cci));
+            clusterStats[c].atr.push(d.atr);
+            clusterStats[c].dates.push(d.date);
+        });
+        
+        // 連続期間の抽出（同じクラスタが連続する日をグループ化）
+        let periods = [];
+        let currentCluster = labeled[0].cluster;
+        let startDate = labeled[0].date;
+        for(let i=1;i<labeled.length;i++){
+            if(labeled[i].cluster !== currentCluster){
+                periods.push({
+                    cluster: currentCluster,
+                    start: startDate,
+                    end: labeled[i-1].date,
+                    days: i - (labeled.findIndex(d=>d.date===startDate))
+                });
+                currentCluster = labeled[i].cluster;
+                startDate = labeled[i].date;
+            }
+        }
+        periods.push({
+            cluster: currentCluster,
+            start: startDate,
+            end: labeled[labeled.length-1].date,
+            days: labeled.length - (labeled.findIndex(d=>d.date===startDate))
+        });
+        
+        // 表示用HTML
+        let html = `<div style="margin-bottom:20px;"><h3>📊 クラスタリング結果 (K=${k})</h3>`;
+        for(let i=0;i<k;i++){
+            const stats = clusterStats[i];
+            const mean = arr => arr.reduce((a,b)=>a+b,0)/arr.length;
+            html += `<div class="cluster-card">
+                <div class="cluster-title">🔹 クラスタ ${i} (${stats.dates.length}日)</div>
+                <div>平均ADX: ${mean(stats.adx).toFixed(1)} | 平均BB幅: ${mean(stats.bbw).toFixed(2)}% | 平均|CCI|: ${mean(stats.abs_cci).toFixed(0)} | 平均ATR: ${mean(stats.atr).toFixed(5)}</div>
+            </div>`;
+        }
+        html += `<h3>📅 連続期間リスト（同じクラスタが続いた期間）</h3><div style="overflow-x:auto;"><table><thead><tr><th>クラスタ</th><th>開始日</th><th>終了日</th><th>日数</th></tr></thead><tbody>`;
+        for(let p of periods){
+            html += `<tr><td>${p.cluster}</td><td>${p.start}</td><td>${p.end}</td><td>${p.days}</td></tr>`;
+        }
+        html += `</tbody></table></div>`;
+        document.getElementById('clusterResult').innerHTML = html;
+        
+        // テキスト出力
+        let text = `===== K-meansクラスタリング結果 (K=${k}) =====\n`;
+        text += `特徴量: ${featuresStr}\n\n`;
+        for(let i=0;i<k;i++){
+            const stats = clusterStats[i];
+            const mean = arr => arr.reduce((a,b)=>a+b,0)/arr.length;
+            text += `【クラスタ ${i}】 (${stats.dates.length}日)\n`;
+            text += `  平均ADX: ${mean(stats.adx).toFixed(1)}\n`;
+            text += `  平均BB幅: ${mean(stats.bbw).toFixed(2)}%\n`;
+            text += `  平均|CCI|: ${mean(stats.abs_cci).toFixed(0)}\n`;
+            text += `  平均ATR: ${mean(stats.atr).toFixed(5)}\n\n`;
+        }
+        text += `【連続期間】\n`;
+        for(let p of periods){
+            text += `クラスタ${p.cluster}: ${p.start} ～ ${p.end} (${p.days}日)\n`;
+        }
+        document.getElementById('clusterText').value = text;
+    }
+    
+    // イベント
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    dropZone.addEventListener('click',()=>fileInput.click());
+    dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('drag-over');});
+    dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('drag-over');addFiles(e.dataTransfer.files);});
+    fileInput.addEventListener('change',e=>addFiles(e.target.files));
+    document.getElementById('calcBtn').addEventListener('click',computeOscillators);
+    document.getElementById('clearBtn').addEventListener('click',()=>{
+        loadedFiles={}; allCandles=[]; computedData=[];
+        updateFileListUI();
+        document.getElementById('clusterCard').style.display='none';
+        document.getElementById('loadStatus').innerHTML='';
+        fileInput.value='';
+        document.getElementById('calcBtn').disabled=true;
+    });
+    document.getElementById('runClusterBtn').addEventListener('click',runClustering);
+    document.getElementById('copyClusterTextBtn').addEventListener('click',()=>{
+        const text = document.getElementById('clusterText').value;
+        navigator.clipboard.writeText(text).then(()=>alert('テキストをコピーしました'));
+    });
+</script>
+</body>
+</html>

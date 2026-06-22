@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>エントリー時間帯別 勝率・PF 集計</title>
+    <style>
+        *{box-sizing:border-box;}
+        body{background:#0f1117;color:#e2e6f0;font-family:system-ui,sans-serif;padding:20px;}
+        .card{background:#171b24;border:0.5px solid #2a3040;border-radius:12px;padding:20px;margin-bottom:24px;}
+        button{background:#4a90d9;border:none;color:#fff;padding:8px 18px;border-radius:8px;cursor:pointer;margin-right:8px;font-weight:bold;}
+        button.secondary{background:#3b4254;}
+        .drop-zone{border:1.5px dashed #2a3040;border-radius:12px;padding:24px;text-align:center;cursor:pointer;background:#0f1117;margin-bottom:16px;}
+        .drop-zone.drag-over{border-color:#4a90d9;background:#1a1f2c;}
+        .file-list{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px;justify-content:center;}
+        .file-chip{background:#1e2330;padding:4px 10px;border-radius:20px;font-size:11px;}
+        table{width:100%;border-collapse:collapse;font-size:13px;margin-top:12px;}
+        th,td{border:0.5px solid #2a3040;padding:8px 6px;text-align:center;}
+        th{background:#1e2330;}
+        .status{font-size:12px;margin-top:8px;}
+        textarea{width:100%;background:#0f1117;border:0.5px solid #2a3040;color:#e2e6f0;font-family:monospace;padding:8px;border-radius:8px;margin-top:12px;font-size:11px;}
+        .btn-group{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;}
+        .zone-name{font-weight:bold;}
+    </style>
+</head>
+<body>
+<div class="card">
+    <h2>📊 エントリー時間帯別 勝率・PF</h2>
+    <p>✅ CSVの「エントリー日時」列から時間を抽出し、下記の時間帯で集計</p>
+    <ul style="font-size:12px; margin:8px 0;">
+        <li>18～22時 (日本時間0～4時)</li>
+        <li>22～2時 (日本時間4～8時) ※日またぎ対応</li>
+        <li>2～9時 (日本時間8～15時)</li>
+        <li>9～16時 (日本時間15～22時)</li>
+        <li>16～18時 (日本時間22～24時)</li>
+    </ul>
+    <div class="drop-zone" id="dropZone">
+        📂 CSVファイルをドロップ（複数可）<br>
+        <span style="font-size:12px;">またはクリックして選択</span>
+        <input type="file" id="fileInput" accept=".csv" multiple style="display:none;">
+        <div class="file-list" id="fileList"></div>
+    </div>
+    <div id="loadStatus" class="status"></div>
+    <div style="margin-top:16px;">
+        <button id="calcBtn" disabled>🔄 集計実行</button>
+        <button id="clearBtn" class="secondary">🗑️ 全クリア</button>
+    </div>
+</div>
+
+<div class="card" id="resultCard" style="display:none;">
+    <h3>集計結果</h3>
+    <div id="resultTable"></div>
+    <div class="btn-group">
+        <button id="copyTextBtn">📋 テキストコピー</button>
+    </div>
+    <textarea id="exportText" rows="8" readonly></textarea>
+</div>
+
+<script>
+    let allTrades = [];
+    let loadedFiles = {};
+
+    // 時間帯定義 (表示名, 開始時間, 終了時間, 補足日本時間)
+    const timeZones = [
+        { name: "18～22時", start: 18, end: 22, jp: "0～4時" },
+        { name: "22～2時", start: 22, end: 2, jp: "4～8時" },   // 日またぎ
+        { name: "2～9時", start: 2, end: 9, jp: "8～15時" },
+        { name: "9～16時", start: 9, end: 16, jp: "15～22時" },
+        { name: "16～18時", start: 16, end: 18, jp: "22～24時" }
+    ];
+
+    function getTimeZone(hour) {
+        for (let tz of timeZones) {
+            if (tz.start <= tz.end) {
+                // 通常の区間（日をまたがない）
+                if (hour >= tz.start && hour < tz.end) return tz;
+            } else {
+                // 日をまたぐ区間（例: 22～2時）: hour>=22 または hour<2
+                if (hour >= tz.start || hour < tz.end) return tz;
+            }
+        }
+        return null; // 該当なし（理論上ない）
+    }
+
+    // CSVパーサ（エントリー日時, 損益(pips)列を抽出）
+    function parseTradeCSV(text, fileName) {
+        const lines = text.split(/\r?\n/).filter(l=>l.trim().length>0);
+        if(lines.length<2) return [];
+        let delim = ',';
+        if(lines[0].includes('\t')) delim = '\t';
+        else if(lines[0].includes(';')) delim = ';';
+        const headers = lines[0].split(delim).map(h=>h.trim().replace(/^\uFEFF/,''));
+
+        let entryDateCol = -1, pipsCol = -1;
+        for(let i=0;i<headers.length;i++){
+            const h = headers[i].toLowerCase();
+            if(h === 'エントリー日時') entryDateCol = i;
+            if(h === '損益(pips)' || h === '損益（pips）' || h === 'pips') pipsCol = i;
+        }
+        if(entryDateCol === -1 || pipsCol === -1){
+            console.warn(`${fileName}: 「エントリー日時」または「損益(pips)」列が見つかりません`);
+            return [];
+        }
+
+        const trades = [];
+        for(let i=1;i<lines.length;i++){
+            const cols = lines[i].split(delim);
+            if(cols.length <= Math.max(entryDateCol, pipsCol)) continue;
+            const dateTimeStr = cols[entryDateCol].trim();
+            const pips = parseFloat(cols[pipsCol]);
+            if(isNaN(pips)) continue;
+            // 日時文字列のパース: "2023.07.17 17:35"
+            const parts = dateTimeStr.split(/[ .:]/);
+            if(parts.length < 5) continue;
+            const year = parseInt(parts[0]);
+            const month = parseInt(parts[1]);
+            const day = parseInt(parts[2]);
+            const hour = parseInt(parts[3]);
+            const minute = parseInt(parts[4]);
+            if(isNaN(year) || isNaN(month) || isNaN(day) || isNaN(hour)) continue;
+            // 時間帯を判定
+            const tz = getTimeZone(hour);
+            if(!tz) continue;
+            trades.push({
+                datetime: dateTimeStr,
+                hour: hour,
+                timezone: tz,
+                pips: pips,
+                isWin: pips > 0
+            });
+        }
+        return trades;
+    }
+
+    function addFiles(fileList){
+        const statusDiv = document.getElementById('loadStatus');
+        Array.from(fileList).forEach(file=>{
+            const reader = new FileReader();
+            reader.onload = e=>{
+                const trades = parseTradeCSV(e.target.result, file.name);
+                if(trades.length===0){
+                    statusDiv.innerHTML = `⚠️ ${file.name} から有効なトレードを検出できませんでした。`;
+                } else {
+                    loadedFiles[file.name] = trades;
+                }
+                const all = Object.values(loadedFiles).flat();
+                allTrades = [...all];
+                statusDiv.innerHTML = `✅ 合計 ${allTrades.length} トレード読み込み完了`;
+                updateFileListUI();
+                if(allTrades.length>0){
+                    document.getElementById('calcBtn').disabled = false;
+                }
+            };
+            reader.readAsText(file,'UTF-8');
+        });
+    }
+
+    function updateFileListUI(){
+        const container = document.getElementById('fileList');
+        if(Object.keys(loadedFiles).length===0){
+            container.innerHTML = '';
+            return;
+        }
+        container.innerHTML = Object.entries(loadedFiles).map(([name,arr])=>`<span class="file-chip">${name} (${arr.length})</span>`).join('');
+    }
+
+    // プロフィットファクター
+    function computePF(profits, losses){
+        const totalProfit = profits.reduce((a,b)=>a+b,0);
+        const totalLoss = Math.abs(losses.reduce((a,b)=>a+b,0));
+        if(totalLoss === 0) return totalProfit > 0 ? Infinity : 0;
+        return totalProfit / totalLoss;
+    }
+
+    function runAnalysis(){
+        // 時間帯ごとに集計
+        const zoneStats = {};
+        for(let tz of timeZones){
+            zoneStats[tz.name] = { wins:0, losses:0, winPips:[], lossPips:[], total:0 };
+        }
+
+        for(let trade of allTrades){
+            const tzName = trade.timezone.name;
+            const stat = zoneStats[tzName];
+            stat.total++;
+            if(trade.isWin){
+                stat.wins++;
+                stat.winPips.push(trade.pips);
+            } else {
+                stat.losses++;
+                stat.lossPips.push(trade.pips);
+            }
+        }
+
+        // 表のHTML生成
+        let html = `<div style="overflow-x:auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>時間帯 (CSV時刻)</th>
+                        <th>日本時間</th>
+                        <th>件数</th>
+                        <th>勝ち数</th>
+                        <th>負け数</th>
+                        <th>勝率 (%)</th>
+                        <th>プロフィットファクター</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+        let totalOverall = 0, winsOverall = 0, lossesOverall = 0;
+        let allWinPips=[], allLossPips=[];
+        for(let tz of timeZones){
+            const stat = zoneStats[tz.name];
+            const total = stat.total;
+            if(total === 0){
+                html += `<tr>
+                    <td>${tz.name}</td>
+                    <td>${tz.jp}</td>
+                    <td colspan="5">データなし</td>
+                </tr>`;
+                continue;
+            }
+            const winRate = (stat.wins/total)*100;
+            const pf = computePF(stat.winPips, stat.lossPips);
+            totalOverall += total;
+            winsOverall += stat.wins;
+            lossesOverall += stat.losses;
+            allWinPips.push(...stat.winPips);
+            allLossPips.push(...stat.lossPips);
+            html += `<tr>
+                <td><strong>${tz.name}</strong></td>
+                <td>${tz.jp}</td>
+                <td>${total}</td>
+                <td>${stat.wins}</td>
+                <td>${stat.losses}</td>
+                <td>${winRate.toFixed(1)}%</td>
+                <td>${pf===Infinity ? '∞' : pf.toFixed(2)}</td>
+            </tr>`;
+        }
+        const overallWinRate = totalOverall===0 ? 0 : (winsOverall/totalOverall)*100;
+        const overallPF = computePF(allWinPips, allLossPips);
+        html += `<tr style="background:#1e2330; font-weight:bold;">
+            <td colspan="2">【合計】</td>
+            <td>${totalOverall}</td>
+            <td>${winsOverall}</td>
+            <td>${lossesOverall}</td>
+            <td>${overallWinRate.toFixed(1)}%</td>
+            <td>${overallPF===Infinity ? '∞' : overallPF.toFixed(2)}</td>
+        </tr>`;
+        html += `</tbody></table></div>`;
+        document.getElementById('resultTable').innerHTML = html;
+
+        // テキスト出力
+        let text = `===== エントリー時間帯別 集計結果 =====\n`;
+        text += `全体トレード数: ${totalOverall}, 勝率: ${overallWinRate.toFixed(1)}%, PF: ${overallPF===Infinity?'∞':overallPF.toFixed(2)}\n\n`;
+        for(let tz of timeZones){
+            const stat = zoneStats[tz.name];
+            const total = stat.total;
+            if(total === 0){
+                text += `【${tz.name} (${tz.jp})】 データなし\n`;
+                continue;
+            }
+            const winRate = (stat.wins/total)*100;
+            const pf = computePF(stat.winPips, stat.lossPips);
+            text += `【${tz.name} (${tz.jp})】\n`;
+            text += `  件数: ${total} (勝ち:${stat.wins} 負け:${stat.losses})\n`;
+            text += `  勝率: ${winRate.toFixed(1)}%\n`;
+            text += `  PF: ${pf===Infinity?'∞':pf.toFixed(2)}\n\n`;
+        }
+        document.getElementById('exportText').value = text;
+        document.getElementById('resultCard').style.display = 'block';
+    }
+
+    // イベント
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    dropZone.addEventListener('click',()=>fileInput.click());
+    dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('drag-over');});
+    dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('drag-over');addFiles(e.dataTransfer.files);});
+    fileInput.addEventListener('change',e=>addFiles(e.target.files));
+    document.getElementById('calcBtn').addEventListener('click',()=>{
+        if(allTrades.length>0) runAnalysis();
+    });
+    document.getElementById('clearBtn').addEventListener('click',()=>{
+        loadedFiles={}; allTrades=[];
+        updateFileListUI();
+        document.getElementById('resultCard').style.display='none';
+        document.getElementById('loadStatus').innerHTML='';
+        fileInput.value='';
+        document.getElementById('calcBtn').disabled=true;
+    });
+    document.getElementById('copyTextBtn').addEventListener('click',()=>{
+        const text = document.getElementById('exportText').value;
+        navigator.clipboard.writeText(text).then(()=>alert('テキストをコピーしました'));
+    });
+</script>
+</body>
+</html>

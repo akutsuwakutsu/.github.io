@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>期間環境比較ツール</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1d2129;
+    --border: #2a2f3a;
+    --text: #e6e8ec;
+    --text-dim: #8a9099;
+    --accent-blue: #5b8def;
+    --accent-green: #4caf7d;
+    --accent-amber: #d6a23c;
+    --accent-red: #e0667a;
+    --mono: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', 'Hiragino Sans', sans-serif;
+    margin: 0;
+    padding: 24px;
+    line-height: 1.5;
+  }
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0 0 4px;
+    letter-spacing: 0.02em;
+  }
+  .subtitle {
+    color: var(--text-dim);
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+  .layout {
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px;
+  }
+  .panel h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin: 0 0 12px;
+    font-weight: 600;
+  }
+  textarea {
+    width: 100%;
+    height: 160px;
+    background: #0b0d11;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    resize: vertical;
+  }
+  .data-status {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .data-status.ok { color: var(--accent-green); }
+  .data-status.err { color: var(--accent-red); }
+
+  .period-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 14px;
+  }
+  .period-block {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px;
+    background: var(--panel-2);
+  }
+  .period-block.a { border-left: 3px solid var(--accent-blue); }
+  .period-block.b { border-left: 3px solid var(--accent-amber); }
+  .period-block label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+  .period-block input[type="date"] {
+    width: 100%;
+    background: #0b0d11;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 6px 8px;
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+  button#runBtn {
+    margin-top: 16px;
+    width: 100%;
+    padding: 11px;
+    background: var(--accent-blue);
+    color: #fff;
+    border: none;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.02em;
+  }
+  button#runBtn:hover { background: #4a7adf; }
+  button#runBtn:disabled { background: #3a3f4a; cursor: not-allowed; }
+
+  .hint {
+    margin-top: 14px;
+    font-size: 11px;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+
+  .results-empty {
+    color: var(--text-dim);
+    font-size: 13px;
+    padding: 40px 20px;
+    text-align: center;
+  }
+
+  table.compare {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  table.compare th, table.compare td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    text-align: right;
+  }
+  table.compare th:first-child, table.compare td:first-child {
+    text-align: left;
+    color: var(--text-dim);
+    font-weight: 500;
+  }
+  table.compare thead th {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    border-bottom: 1px solid var(--border);
+  }
+  table.compare thead th.a-col { color: var(--accent-blue); }
+  table.compare thead th.b-col { color: var(--accent-amber); }
+  td.diff-col { font-family: var(--mono); font-size: 12px; }
+  .diff-good { color: var(--accent-green); }
+  .diff-bad { color: var(--accent-red); }
+  .diff-mid { color: var(--text-dim); }
+
+  .score-card {
+    margin-top: 18px;
+    padding: 16px;
+    border-radius: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 18px;
+  }
+  .score-num {
+    font-size: 38px;
+    font-weight: 700;
+    font-family: var(--mono);
+    line-height: 1;
+  }
+  .score-label {
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .score-bar-track {
+    flex: 1;
+    height: 8px;
+    background: #0b0d11;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .score-bar-fill {
+    height: 100%;
+    border-radius: 4px;
+  }
+
+  .note-box {
+    margin-top: 16px;
+    padding: 12px 14px;
+    background: #1a1f14;
+    border: 1px solid #3a4a2a;
+    border-radius: 7px;
+    font-size: 12.5px;
+    color: #c8d4ab;
+  }
+  .note-box.warn {
+    background: #261a1a;
+    border-color: #4a2a2a;
+    color: #d4b3ab;
+  }
+
+  .chart-wrap {
+    margin-top: 18px;
+  }
+  .chart-wrap h3 {
+    font-size: 12px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0 0 8px;
+  }
+  svg.minichart { width: 100%; height: 130px; display: block; }
+  .legend {
+    display: flex;
+    gap: 16px;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-top: 6px;
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+
+<h1>期間環境比較ツール</h1>
+<div class="subtitle">2つの期間の「荒さ(ボラティリティ)」と「勢いの一貫性」を数値で比較します</div>
+
+<div class="layout">
+  <div class="panel">
+    <h2>1. データを貼り付け</h2>
+    <textarea id="csvInput" placeholder="日付,始値,高値,安値,終値,MA50,MA50傾き,MA200,MA200傾き,CCI(14),ATR(14),ADX(14),BB幅%&#10;2021-01-04,1.2239,1.231,1.223,1.2247,-,-,-,-,-,-,-,-&#10;..."></textarea>
+    <div class="data-status" id="dataStatus">データが入力されていません</div>
+
+    <h2 style="margin-top:18px;">2. 比較する2つの期間</h2>
+    <div class="period-row">
+      <div class="period-block a">
+        <label>期間A 開始</label>
+        <input type="date" id="aStart">
+        <label>期間A 終了</label>
+        <input type="date" id="aEnd">
+      </div>
+      <div class="period-block b">
+        <label>期間B 開始</label>
+        <input type="date" id="bStart">
+        <label>期間B 終了</label>
+        <input type="date" id="bEnd">
+      </div>
+    </div>
+
+    <button id="runBtn">比較する</button>
+
+    <div class="hint">
+      ※ ATR・BB幅%・ADXは、列に既に値がある場合はそれを使用し、'-' の行は平均計算から除外します。<br>
+      ※ 効率性比率(ER)は |終値の変化| ÷ 値動きの総距離 で計算し、0〜1の値で「一方向への進み具合」を表します。
+    </div>
+  </div>
+
+  <div class="panel" id="resultsPanel">
+    <h2>比較結果</h2>
+    <div class="results-empty" id="resultsEmpty">データと期間を入力して「比較する」を押してください</div>
+    <div id="resultsContent" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+let parsedRows = [];
+
+function parseCSV(text) {
+  const lines = text.trim().split(/\r?\n/).filter(l => l.trim().length > 0);
+  if (lines.length < 2) return [];
+
+  // 区切り文字を自動判定(タブが含まれていればタブ区切り、なければカンマ区切り)
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+
+  const rows = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cols = lines[i].split(delimiter).map(c => c.trim());
+    if (cols.length < 13) continue;
+    const date = normalizeDate(cols[0]);
+    if (!date) continue;
+    const num = (s) => {
+      if (s === '-' || s === '' || s === undefined) return null;
+      const v = parseFloat(s.replace(/,/g, ''));
+      return isNaN(v) ? null : v;
+    };
+    const o = num(cols[1]), h = num(cols[2]), l = num(cols[3]), c = num(cols[4]);
+    if (o === null || h === null || l === null || c === null) continue;
+    rows.push({
+      date: date,
+      open: o, high: h, low: l, close: c,
+      atr: num(cols[10]),
+      adx: num(cols[11]),
+      bbw: num(cols[12]),
+    });
+  }
+  rows.sort((a, b) => a.date.localeCompare(b.date));
+  return rows;
+}
+
+function normalizeDate(raw) {
+  // 既に YYYY-MM-DD 形式ならそのまま
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+
+  // YYYY/M/D や YYYY/MM/DD (Excelの表示形式)
+  let m = raw.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})/);
+  if (m) {
+    const [, y, mo, d] = m;
+    return `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+
+  // M/D/YYYY (米国形式)
+  m = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) {
+    const [, mo, d, y] = m;
+    return `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+
+  // YYYY-M-D や YYYY.M.D
+  m = raw.match(/^(\d{4})[-.](\d{1,2})[-.](\d{1,2})/);
+  if (m) {
+    const [, y, mo, d] = m;
+    return `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`;
+  }
+
+  // Excelのシリアル値(数値のみ、例: 44200)の可能性
+  if (/^\d{4,6}(\.0+)?$/.test(raw)) {
+    const serial = parseFloat(raw);
+    // Excelのシリアル値は1899-12-30を基準とする
+    const epoch = new Date(1899, 11, 30);
+    const date = new Date(epoch.getTime() + serial * 86400000);
+    const y = date.getFullYear();
+    const mo = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${mo}-${d}`;
+  }
+
+  return null;
+}
+
+const csvInput = document.getElementById('csvInput');
+const dataStatus = document.getElementById('dataStatus');
+const aStart = document.getElementById('aStart');
+const aEnd = document.getElementById('aEnd');
+const bStart = document.getElementById('bStart');
+const bEnd = document.getElementById('bEnd');
+
+csvInput.addEventListener('input', () => {
+  parsedRows = parseCSV(csvInput.value);
+  if (parsedRows.length === 0) {
+    dataStatus.textContent = 'データが認識できません(ヘッダー行+日付,始値,高値,安値,終値,...の形式で貼り付けてください)';
+    dataStatus.className = 'data-status err';
+    return;
+  }
+  dataStatus.textContent = `${parsedRows.length}件のデータを読み込みました(${parsedRows[0].date} 〜 ${parsedRows[parsedRows.length-1].date})`;
+  dataStatus.className = 'data-status ok';
+
+  [aStart, aEnd, bStart, bEnd].forEach(el => {
+    el.min = parsedRows[0].date;
+    el.max = parsedRows[parsedRows.length-1].date;
+  });
+});
+csvInput.addEventListener('paste', () => {
+  setTimeout(() => csvInput.dispatchEvent(new Event('input')), 0);
+});
+
+function findRange(rows, startDate, endDate) {
+  const filtered = rows.filter(r => r.date >= startDate && r.date <= endDate);
+  return filtered;
+}
+
+function calcStats(rows) {
+  if (rows.length < 2) return null;
+
+  const highs = rows.map(r => r.high);
+  const lows = rows.map(r => r.low);
+  const closes = rows.map(r => r.close);
+
+  const rangePips = (Math.max(...highs) - Math.min(...lows)) * 10000;
+  const days = rows.length;
+
+  const atrVals = rows.map(r => r.atr).filter(v => v !== null && !isNaN(v));
+  const adxVals = rows.map(r => r.adx).filter(v => v !== null && !isNaN(v));
+  const bbwVals = rows.map(r => r.bbw).filter(v => v !== null && !isNaN(v));
+
+  const avg = arr => arr.length ? arr.reduce((a,b) => a+b, 0) / arr.length : null;
+
+  const netChange = Math.abs(closes[closes.length-1] - closes[0]);
+  let pathLength = 0;
+  for (let i = 1; i < closes.length; i++) pathLength += Math.abs(closes[i] - closes[i-1]);
+  const er = pathLength > 0 ? netChange / pathLength : 0;
+
+  const startClose = closes[0];
+  const endClose = closes[closes.length-1];
+  const netPips = (endClose - startClose) * 10000;
+
+  return {
+    days, rangePips,
+    avgAtr: avg(atrVals), avgAdx: avg(adxVals), avgBbw: avg(bbwVals),
+    er, startClose, endClose, netPips, closes
+  };
+}
+
+function fmtNum(v, digits) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return v.toFixed(digits);
+}
+
+function diffClass(diffRatio) {
+  // diffRatio: 0に近いほど似ている
+  if (diffRatio < 0.15) return 'diff-good';
+  if (diffRatio < 0.40) return 'diff-mid';
+  return 'diff-bad';
+}
+
+function diffLabel(diffRatio) {
+  if (diffRatio < 0.15) return '近い';
+  if (diffRatio < 0.40) return '差あり';
+  return '大きく違う';
+}
+
+function buildMiniChart(rowsA, rowsB) {
+  // 両期間の終値を正規化(開始値を0%とした変化率)して重ねて描く
+  const normalize = rows => {
+    const base = rows[0].close;
+    return rows.map(r => ((r.close - base) / base) * 100);
+  };
+  const na = normalize(rowsA);
+  const nb = normalize(rowsB);
+  const allVals = na.concat(nb);
+  const minV = Math.min(...allVals);
+  const maxV = Math.max(...allVals);
+  const range = (maxV - minV) || 1;
+
+  const w = 600, h = 130, pad = 10;
+  const toPath = (arr) => {
+    return arr.map((v, i) => {
+      const x = pad + (i / (arr.length - 1)) * (w - pad*2);
+      const y = h - pad - ((v - minV) / range) * (h - pad*2);
+      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+  };
+
+  const zeroY = h - pad - ((0 - minV) / range) * (h - pad*2);
+
+  return `
+    <svg class="minichart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+      <line x1="${pad}" y1="${zeroY.toFixed(1)}" x2="${w-pad}" y2="${zeroY.toFixed(1)}" stroke="#2a2f3a" stroke-width="1" stroke-dasharray="3,3"/>
+      <path d="${toPath(na)}" fill="none" stroke="#5b8def" stroke-width="2"/>
+      <path d="${toPath(nb)}" fill="none" stroke="#d6a23c" stroke-width="2"/>
+    </svg>
+    <div class="legend">
+      <span><span class="dot" style="background:#5b8def;"></span>期間A(開始日を0%とした変化率)</span>
+      <span><span class="dot" style="background:#d6a23c;"></span>期間B(開始日を0%とした変化率)</span>
+    </div>
+  `;
+}
+
+document.getElementById('runBtn').addEventListener('click', () => {
+  if (parsedRows.length === 0) {
+    alert('先にデータを貼り付けてください');
+    return;
+  }
+  if (!aStart.value || !aEnd.value || !bStart.value || !bEnd.value) {
+    alert('期間A・Bの開始日と終了日をすべて指定してください');
+    return;
+  }
+
+  const rowsA = findRange(parsedRows, aStart.value, aEnd.value);
+  const rowsB = findRange(parsedRows, bStart.value, bEnd.value);
+
+  if (rowsA.length < 2 || rowsB.length < 2) {
+    alert('指定した期間のデータが見つかりません(データの日付範囲を確認してください)');
+    return;
+  }
+
+  const statsA = calcStats(rowsA);
+  const statsB = calcStats(rowsB);
+
+  document.getElementById('resultsEmpty').style.display = 'none';
+  const content = document.getElementById('resultsContent');
+  content.style.display = 'block';
+
+  // 各指標の差分比率を計算(0に近いほど似ている)
+  const ratio = (a, b) => {
+    if (a === null || b === null) return null;
+    const denom = Math.max(Math.abs(a), Math.abs(b), 1e-9);
+    return Math.abs(a - b) / denom;
+  };
+
+  const rows = [
+    { label: '期間の長さ(日数)', a: statsA.days, b: statsB.days, fmt: v => v + '日', ratio: ratio(statsA.days, statsB.days) },
+    { label: 'レンジ幅(pips)', a: statsA.rangePips, b: statsB.rangePips, fmt: v => fmtNum(v,1), ratio: ratio(statsA.rangePips, statsB.rangePips) },
+    { label: '平均ATR', a: statsA.avgAtr, b: statsB.avgAtr, fmt: v => fmtNum(v,5), ratio: ratio(statsA.avgAtr, statsB.avgAtr) },
+    { label: '平均BB幅%', a: statsA.avgBbw, b: statsB.avgBbw, fmt: v => fmtNum(v,3), ratio: ratio(statsA.avgBbw, statsB.avgBbw) },
+    { label: '平均ADX', a: statsA.avgAdx, b: statsB.avgAdx, fmt: v => fmtNum(v,2), ratio: ratio(statsA.avgAdx, statsB.avgAdx) },
+    { label: '効率性比率(ER)', a: statsA.er, b: statsB.er, fmt: v => fmtNum(v,4), ratio: ratio(statsA.er, statsB.er), highlight: true },
+    { label: '開始→終了の変化(pips)', a: statsA.netPips, b: statsB.netPips, fmt: v => (v>=0?'+':'')+fmtNum(v,1), ratio: ratio(Math.abs(statsA.netPips), Math.abs(statsB.netPips)) },
+  ];
+
+  let tableHtml = `
+    <table class="compare">
+      <thead>
+        <tr>
+          <th>指標</th>
+          <th class="a-col">期間A</th>
+          <th class="b-col">期間B</th>
+          <th>近さ</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+  for (const r of rows) {
+    const dc = r.ratio === null ? 'diff-mid' : diffClass(r.ratio);
+    const dl = r.ratio === null ? '—' : diffLabel(r.ratio);
+    tableHtml += `
+      <tr ${r.highlight ? 'style="background:#1d2129;"' : ''}>
+        <td>${r.label}</td>
+        <td>${r.fmt(r.a)}</td>
+        <td>${r.fmt(r.b)}</td>
+        <td class="diff-col ${dc}">${dl}</td>
+      </tr>
+    `;
+  }
+  tableHtml += `</tbody></table>`;
+
+  // 総合スコア(ボラティリティ系3指標 + ER の単純平均、0-100で近いほど高スコア)
+  const volRatios = [ratio(statsA.rangePips, statsB.rangePips), ratio(statsA.avgAtr, statsB.avgAtr), ratio(statsA.avgBbw, statsB.avgBbw), ratio(statsA.avgAdx, statsB.avgAdx)].filter(v => v !== null);
+  const erRatio = ratio(statsA.er, statsB.er);
+
+  const volScore = volRatios.length ? 100 * (1 - volRatios.reduce((a,b)=>a+b,0)/volRatios.length) : null;
+  const erScore = erRatio !== null ? 100 * (1 - erRatio) : null;
+
+  let scoreColor = '#4caf7d';
+  let overallNote = '';
+  if (volScore !== null && erScore !== null) {
+    if (volScore > 70 && erScore < 40) {
+      overallNote = '荒さ(ボラティリティ)は似ていますが、勢いの一貫性(ER)が大きく異なります。レンジ幅やATRが近くても、片方が一方向に進み、もう片方は往復しているだけ、という可能性があります。区切り方を見直す価値があるかもしれません。';
+      scoreColor = '#d6a23c';
+    } else if (volScore > 70 && erScore > 70) {
+      overallNote = '荒さ・勢いの一貫性ともに近く、似た性質の期間と言えそうです。';
+      scoreColor = '#4caf7d';
+    } else if (volScore < 40) {
+      overallNote = '荒さ(ボラティリティ)自体が大きく異なります。期間としての性質がそもそも違う可能性があります。';
+      scoreColor = '#e0667a';
+    } else {
+      overallNote = 'いくつかの指標は近いですが、全体として中程度の類似度です。';
+      scoreColor = '#d6a23c';
+    }
+  }
+
+  let scoreHtml = '';
+  if (volScore !== null && erScore !== null) {
+    scoreHtml = `
+      <div class="score-card">
+        <div>
+          <div class="score-num" style="color:${scoreColor};">${Math.round((volScore+erScore)/2)}</div>
+          <div class="score-label">総合<br>類似度</div>
+        </div>
+        <div style="flex:1;">
+          <div style="font-size:12px; color:var(--text-dim); margin-bottom:6px;">荒さの近さ: ${Math.round(volScore)} / 勢いの一貫性の近さ: ${Math.round(erScore)}</div>
+          <div class="score-bar-track"><div class="score-bar-fill" style="width:${Math.round((volScore+erScore)/2)}%; background:${scoreColor};"></div></div>
+        </div>
+      </div>
+      <div class="note-box">${overallNote}</div>
+    `;
+  }
+
+  content.innerHTML = tableHtml + scoreHtml + `
+    <div class="chart-wrap">
+      <h3>値動きの形を重ねて比較(開始日を0%とした変化率)</h3>
+      ${buildMiniChart(rowsA, rowsB)}
+    </div>
+  `;
+});
+</script>
+
+</body>
+</html>
