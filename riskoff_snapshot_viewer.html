@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>RiskOff Snapshot — 通貨強弱分析</title>
+<style>
+:root{
+  --bg:#0d1117;--panel:#161b22;--border:#21262d;
+  --text:#e6edf3;--muted:#7d8590;
+  --safe:#3fb950;--risk:#f85149;--spread:#58a6ff;--warn:#d29922;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;font-size:13px}
+header{padding:16px 24px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+header h1{font-size:16px;font-weight:600}
+.meta{color:var(--muted);font-size:11px}
+.upload-area{margin:20px;border:2px dashed var(--border);border-radius:10px;padding:28px;text-align:center;cursor:pointer;transition:border-color .2s}
+.upload-area:hover{border-color:var(--spread)}
+.upload-area input{display:none}
+.upload-area p{color:var(--muted);margin-top:8px;font-size:12px}
+#dashboard{display:none;padding:0 20px 40px}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+.panel h2{font-size:11px;font-weight:600;margin-bottom:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+.chart-wrap{width:100%;overflow:hidden}
+.legend{display:flex;gap:12px;margin-bottom:8px;font-size:11px;flex-wrap:wrap}
+.legend span{display:flex;align-items:center;gap:4px}
+.legend i{width:14px;height:3px;display:inline-block;border-radius:2px}
+.kpi-row{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.kpi{flex:1;min-width:100px;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:10px 12px}
+.kpi .label{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px}
+.kpi .value{font-size:18px;font-weight:700}
+.slope-tabs{display:flex;gap:6px;margin-bottom:10px}
+.tab{padding:3px 10px;border-radius:16px;font-size:11px;cursor:pointer;border:1px solid var(--border);background:transparent;color:var(--muted);transition:all .15s}
+.tab.active{background:var(--spread);border-color:var(--spread);color:#fff}
+</style>
+</head>
+<body>
+<header>
+  <h1>RiskOff Snapshot — 通貨強弱分析</h1>
+  <div class="meta" id="metaInfo">CSVを読み込んでください</div>
+</header>
+<div class="upload-area" id="dz">
+  <label for="fi" style="cursor:pointer">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#58a6ff" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    <p>RiskOff_Snapshot_*.csv をドロップ、またはクリックして選択</p>
+  </label>
+  <input type="file" id="fi" accept=".csv">
+</div>
+<div id="dashboard">
+  <div class="kpi-row" id="kpiRow"></div>
+
+  <div class="panel">
+    <h2>通貨強弱の推移（当日騰落率 %）</h2>
+    <div class="legend">
+      <span><i style="background:#3fb950"></i>DXY（セーフ）</span>
+      <span><i style="background:#79c0ff"></i>JPY（セーフ）</span>
+      <span><i style="background:#f85149"></i>EUR（リスク）</span>
+      <span><i style="background:#d2a8ff"></i>GBP（リスク）</span>
+      <span><i style="background:#ffa657"></i>AUD（リスク）</span>
+      <span><i style="background:#7ee787"></i>NZD（リスク）</span>
+    </div>
+    <div class="chart-wrap" id="pctWrap"></div>
+  </div>
+
+  <div class="panel">
+    <h2>セーフ側平均 vs リスク側平均 / 乖離幅（Spread）</h2>
+    <div class="legend">
+      <span><i style="background:#3fb950"></i>Safe_Avg</span>
+      <span><i style="background:#f85149"></i>Risk_Avg</span>
+      <span><i style="background:#58a6ff;height:2px;border-top:2px dashed #58a6ff;background:transparent"></i>Spread</span>
+    </div>
+    <div class="chart-wrap" id="avgWrap"></div>
+  </div>
+
+  <div class="panel">
+    <h2>傾き（Slope）の推移</h2>
+    <div class="slope-tabs">
+      <button class="tab active" onclick="setSlopeL(2,this)">L=2（直近2本）</button>
+      <button class="tab" onclick="setSlopeL(5,this)">L=5（直近5本）</button>
+      <button class="tab" onclick="setSlopeL(10,this)">L=10（直近10本）</button>
+    </div>
+    <div class="legend">
+      <span><i style="background:#3fb950"></i>Safe_slope（DXY+JPY平均）</span>
+      <span><i style="background:#f85149"></i>Risk_slope（EUR+GBP+AUD+NZD平均）</span>
+    </div>
+    <div class="chart-wrap" id="slopeWrap"></div>
+  </div>
+
+  <div class="panel">
+    <h2>各通貨の傾き（Slope）個別推移</h2>
+    <div class="slope-tabs">
+      <button class="tab active" onclick="setSlopeL2(2,this)">L=2</button>
+      <button class="tab" onclick="setSlopeL2(5,this)">L=5</button>
+      <button class="tab" onclick="setSlopeL2(10,this)">L=10</button>
+    </div>
+    <div class="legend">
+      <span><i style="background:#3fb950"></i>DXY</span>
+      <span><i style="background:#79c0ff"></i>JPY</span>
+      <span><i style="background:#f85149"></i>EUR</span>
+      <span><i style="background:#d2a8ff"></i>GBP</span>
+      <span><i style="background:#ffa657"></i>AUD</span>
+      <span><i style="background:#7ee787"></i>NZD</span>
+    </div>
+    <div class="chart-wrap" id="slopeDetailWrap"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+var csvData = [];
+var labels = [];
+var currentSlopeL = 2;
+var currentSlopeL2 = 2;
+var charts = {};
+
+document.getElementById('fi').addEventListener('change', function(e){ loadCSV(e.target.files[0]); });
+var dz = document.getElementById('dz');
+dz.addEventListener('dragover', function(e){ e.preventDefault(); dz.style.borderColor='#58a6ff'; });
+dz.addEventListener('dragleave', function(){ dz.style.borderColor=''; });
+dz.addEventListener('drop', function(e){ e.preventDefault(); dz.style.borderColor=''; loadCSV(e.dataTransfer.files[0]); });
+
+function loadCSV(file){
+  var rd = new FileReader();
+  rd.onload = function(e){
+    var lines = e.target.result.replace(/\r/g,'').split('\n').filter(function(l){ return l.trim(); });
+    var hdr = lines[0].split(',');
+    var colMap = {};
+    hdr.forEach(function(h,i){ colMap[h.trim()] = i; });
+    csvData = lines.slice(1).map(function(l){
+      var cols = l.split(',');
+      var row = {};
+      hdr.forEach(function(h,i){ row[h.trim()] = cols[i] ? parseFloat(cols[i]) : 0; });
+      row['Time'] = cols[0];
+      return row;
+    });
+    labels = csvData.map(function(r){ return r['Time'].slice(5); }); // MM.DD HH:MM
+    document.getElementById('metaInfo').textContent = file.name + '　' + csvData.length + 'バー';
+    dz.style.display = 'none';
+    document.getElementById('dashboard').style.display = 'block';
+    renderAll();
+  };
+  rd.readAsText(file, 'Shift_JIS');
+}
+
+function col(key){ return csvData.map(function(r){ return r[key]; }); }
+
+function renderKPI(){
+  var spreads = col('Spread');
+  var minSpread = Math.min.apply(null, spreads);
+  var maxSpread = Math.max.apply(null, spreads);
+  var minIdx = spreads.indexOf(minSpread);
+  var maxIdx = spreads.indexOf(maxSpread);
+  var safeAvg = col('Safe_Avg');
+  var riskAvg = col('Risk_Avg');
+
+  document.getElementById('kpiRow').innerHTML =
+    '<div class="kpi"><div class="label">Spreadピーク（最大乖離）</div><div class="value" style="color:var(--risk)">' + minSpread.toFixed(4) + '</div><div style="color:var(--muted);font-size:10px;margin-top:2px">' + (labels[minIdx]||'') + '</div></div>' +
+    '<div class="kpi"><div class="label">Spread最大（リスクオン寄り）</div><div class="value" style="color:var(--safe)">' + maxSpread.toFixed(4) + '</div><div style="color:var(--muted);font-size:10px;margin-top:2px">' + (labels[maxIdx]||'') + '</div></div>' +
+    '<div class="kpi"><div class="label">Safe_Avg 最高値</div><div class="value" style="color:var(--safe)">' + Math.max.apply(null,safeAvg).toFixed(4) + '</div></div>' +
+    '<div class="kpi"><div class="label">Risk_Avg 最高値</div><div class="value" style="color:var(--risk)">' + Math.max.apply(null,riskAvg).toFixed(4) + '</div></div>';
+}
+
+function makeChart(canvasId, config){
+  if(charts[canvasId]){ charts[canvasId].destroy(); }
+  var canvas = document.getElementById(canvasId);
+  charts[canvasId] = new Chart(canvas, config);
+}
+
+function ensureCanvas(wrapId, canvasId){
+  var wrap = document.getElementById(wrapId);
+  if(!document.getElementById(canvasId)){
+    wrap.innerHTML = '<div style="position:relative;width:100%;height:260px"><canvas id="'+canvasId+'" role="img" aria-label="通貨強弱チャート"></canvas></div>';
+  }
+}
+
+var COLORS = {
+  DXY:'#3fb950', JPY:'#79c0ff',
+  EUR:'#f85149', GBP:'#d2a8ff', AUD:'#ffa657', NZD:'#7ee787',
+  safe:'#3fb950', risk:'#f85149', spread:'#58a6ff'
+};
+
+function renderPct(){
+  ensureCanvas('pctWrap','pctChart');
+  makeChart('pctChart',{
+    type:'line',
+    data:{
+      labels: labels,
+      datasets:[
+        {label:'DXY%', data:col('DXY%'), borderColor:COLORS.DXY, backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3},
+        {label:'JPY%', data:col('JPY%'), borderColor:COLORS.JPY, backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3},
+        {label:'EUR%', data:col('EUR%'), borderColor:COLORS.EUR, backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, borderDash:[4,2]},
+        {label:'GBP%', data:col('GBP%'), borderColor:COLORS.GBP, backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, borderDash:[4,2]},
+        {label:'AUD%', data:col('AUD%'), borderColor:COLORS.AUD, backgroundColor:'transparent', borderWidth:1.5, pointRadius:0, tension:0.3, borderDash:[2,3]},
+        {label:'NZD%', data:col('NZD%'), borderColor:COLORS.NZD, backgroundColor:'transparent', borderWidth:1.5, pointRadius:0, tension:0.3, borderDash:[2,3]},
+      ]
+    },
+    options: commonOpts('騰落率(%)')
+  });
+}
+
+function renderAvg(){
+  ensureCanvas('avgWrap','avgChart');
+  var spreadData = col('Spread');
+  makeChart('avgChart',{
+    type:'line',
+    data:{
+      labels: labels,
+      datasets:[
+        {label:'Safe_Avg', data:col('Safe_Avg'), borderColor:COLORS.safe, backgroundColor:'rgba(63,185,80,0.08)', borderWidth:2, pointRadius:0, tension:0.3, fill:true},
+        {label:'Risk_Avg', data:col('Risk_Avg'), borderColor:COLORS.risk, backgroundColor:'rgba(248,81,73,0.08)', borderWidth:2, pointRadius:0, tension:0.3, fill:true},
+        {label:'Spread', data:spreadData, borderColor:COLORS.spread, backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, borderDash:[6,3]},
+      ]
+    },
+    options: commonOpts('値(%)')
+  });
+}
+
+function setSlopeL(l, el){
+  currentSlopeL = l;
+  document.querySelectorAll('#dashboard .slope-tabs')[0].querySelectorAll('.tab').forEach(function(t){ t.className='tab'; });
+  el.className='tab active';
+  renderSlope();
+}
+function setSlopeL2(l, el){
+  currentSlopeL2 = l;
+  document.querySelectorAll('#dashboard .slope-tabs')[1].querySelectorAll('.tab').forEach(function(t){ t.className='tab'; });
+  el.className='tab active';
+  renderSlopeDetail();
+}
+
+function renderSlope(){
+  ensureCanvas('slopeWrap','slopeChart');
+  var l = currentSlopeL;
+  makeChart('slopeChart',{
+    type:'line',
+    data:{
+      labels: labels,
+      datasets:[
+        {label:'Safe_slope', data:col('Safe_slope'+l), borderColor:COLORS.safe, backgroundColor:'rgba(63,185,80,0.07)', borderWidth:2.5, pointRadius:0, tension:0.3, fill:true},
+        {label:'Risk_slope', data:col('Risk_slope'+l), borderColor:COLORS.risk, backgroundColor:'rgba(248,81,73,0.07)', borderWidth:2.5, pointRadius:0, tension:0.3, fill:true},
+      ]
+    },
+    options: commonOpts('傾き')
+  });
+}
+
+function renderSlopeDetail(){
+  ensureCanvas('slopeDetailWrap','slopeDetailChart');
+  var l = currentSlopeL2;
+  makeChart('slopeDetailChart',{
+    type:'line',
+    data:{
+      labels: labels,
+      datasets:[
+        {label:'DXY', data:col('DXY_slope'+l), borderColor:COLORS.DXY, backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3},
+        {label:'JPY', data:col('JPY_slope'+l), borderColor:COLORS.JPY, backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3},
+        {label:'EUR', data:col('EUR_slope'+l), borderColor:COLORS.EUR, backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, borderDash:[4,2]},
+        {label:'GBP', data:col('GBP_slope'+l), borderColor:COLORS.GBP, backgroundColor:'transparent', borderWidth:2, pointRadius:0, tension:0.3, borderDash:[4,2]},
+        {label:'AUD', data:col('AUD_slope'+l), borderColor:COLORS.AUD, backgroundColor:'transparent', borderWidth:1.5, pointRadius:0, tension:0.3, borderDash:[2,3]},
+        {label:'NZD', data:col('NZD_slope'+l), borderColor:COLORS.NZD, backgroundColor:'transparent', borderWidth:1.5, pointRadius:0, tension:0.3, borderDash:[2,3]},
+      ]
+    },
+    options: commonOpts('傾き')
+  });
+}
+
+function commonOpts(yLabel){
+  return {
+    responsive:true, maintainAspectRatio:false,
+    plugins:{ legend:{display:false}, tooltip:{
+      mode:'index', intersect:false,
+      backgroundColor:'#161b22', borderColor:'#21262d', borderWidth:1,
+      titleColor:'#e6edf3', bodyColor:'#7d8590',
+      callbacks:{
+        label: function(ctx){
+          return ctx.dataset.label+': '+(ctx.parsed.y).toFixed(5);
+        }
+      }
+    }},
+    interaction:{ mode:'index', intersect:false },
+    scales:{
+      x:{
+        ticks:{ color:'#7d8590', font:{size:10}, maxTicksLimit:12, maxRotation:0 },
+        grid:{ color:'#21262d' }
+      },
+      y:{
+        title:{ display:true, text:yLabel, color:'#7d8590', font:{size:10} },
+        ticks:{ color:'#7d8590', font:{size:10} },
+        grid:{ color:'#21262d' }
+      }
+    },
+    animation:{ duration:300 }
+  };
+}
+
+function renderAll(){
+  renderKPI();
+  renderPct();
+  renderAvg();
+  renderSlope();
+  renderSlopeDetail();
+}
+</script>
+</body>
+</html>
